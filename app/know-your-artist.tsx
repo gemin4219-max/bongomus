@@ -4,7 +4,7 @@ import { Image } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
-import { BlurView } from 'expo-blur';
+import { GlassView as BlurView } from '@/components/GlassView';
 import { useThemeStore } from '../store/themeStore';
 
 const { width } = Dimensions.get('window');

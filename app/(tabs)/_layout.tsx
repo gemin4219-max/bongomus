@@ -1,8 +1,8 @@
 import { Tabs, useSegments } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { View, StyleSheet, Platform, Animated } from 'react-native';
-import { BlurView } from 'expo-blur';
-import { BottomTabBar } from '@react-navigation/bottom-tabs';
+import { GlassView as BlurView } from '@/components/GlassView';
+import { BottomTabBar } from 'expo-router/build/react-navigation/bottom-tabs';
 import { useThemeStore } from '../../store/themeStore';
 import { useLayoutStore } from '../../store/layoutStore';
 import { useEffect, useRef } from 'react';
@@ -76,8 +76,13 @@ export default function TabsLayout() {
         <Tabs.Screen
           name="ai-studio"
           options={{
-            title: "AI Studio",
-            tabBarIcon: ({ color }) => <TabBarIcon name="color-wand" color={color} />,
+            title: "",
+            tabBarLabel: () => null,
+            tabBarIcon: ({ focused }) => (
+              <View style={[styles.studioIconOuter, focused && styles.studioIconOuterFocused]}>
+                <Ionicons name="musical-notes" size={24} color={COLORS.white} />
+              </View>
+            ),
           }}
         />
         <Tabs.Screen
@@ -92,7 +97,7 @@ export default function TabsLayout() {
           name="radio"
           options={{
             title: "Live",
-            href: null, // Hidden from tab bar — accessible from Profile
+            href: null, // Hidden from tab bar - accessible from Profile
             tabBarIcon: ({ color }) => <TabBarIcon name="radio" color={color} />,
           }}
         />
@@ -125,28 +130,58 @@ const getStyles = (COLORS: any) => StyleSheet.create({
     bottom: 0,
     left: 0,
     right: 0,
-    backgroundColor: 'transparent',
+    backgroundColor: 'rgba(10, 10, 15, 0.98)',
     overflow: 'hidden',
   },
   playerTabDivider: {
     height: StyleSheet.hairlineWidth,
     backgroundColor: 'rgba(255,255,255,0.1)',
-    marginHorizontal: 16,
   },
   tabBarTopBorder: {
-    height: 1,
+    height: StyleSheet.hairlineWidth,
     backgroundColor: 'rgba(255,255,255,0.08)',
+  },
+  customTabBar: {
+    flexDirection: 'row',
+    height: Platform.OS === 'ios' ? 86 : 64,
+    paddingBottom: Platform.OS === 'ios' ? 24 : 8,
+    paddingTop: 8,
+    alignItems: 'center',
+    justifyContent: 'space-around',
+    backgroundColor: 'transparent',
+  },
+  tabItem: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+  },
+  label: {
+    fontSize: 10,
+    fontWeight: '600',
   },
   tabBar: {
     backgroundColor: 'transparent', // Let BlurView show through
+    position: 'relative',
     borderTopWidth: 0,
     height: Platform.OS === 'ios' ? 90 : 72,
     paddingBottom: Platform.OS === 'ios' ? 24 : 10,
     paddingTop: 10,
     elevation: 0,
   },
-  label: {
-    fontSize: 11,
-    fontWeight: '600',
+  studioIconOuter: {
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 6,
+  },
+  studioIconOuterFocused: {
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
   },
 });
+// force hot reload
+
+

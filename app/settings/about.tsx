@@ -1,7 +1,7 @@
 import React from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Linking } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { BlurView } from 'expo-blur';
+import { GlassView as BlurView } from '@/components/GlassView';
 import { Stack, useRouter } from 'expo-router';
 import { useThemeStore } from '../../store/themeStore';
 

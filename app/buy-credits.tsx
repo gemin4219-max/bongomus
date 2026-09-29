@@ -3,10 +3,11 @@ import { View, Text, StyleSheet, TouchableOpacity, TextInput, ActivityIndicator,
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Stack, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { BlurView } from 'expo-blur';
+import { GlassView as BlurView } from '@/components/GlassView';
 import { supabase } from '../lib/supabase';
 import { useAuthStore } from '../store/authStore';
 import { useThemeStore } from '../store/themeStore';
+import { LinearGradient } from 'expo-linear-gradient';
 
 
 export default function BuyCreditsScreen() {
@@ -53,15 +54,27 @@ export default function BuyCreditsScreen() {
   }, [transactionId]);
 
   const handlePayment = async () => {
-    if (!phoneNumber || phoneNumber.length < 9) {
+    const cleanPhone = phoneNumber.replace(/\s+/g, '');
+
+    if (!cleanPhone || cleanPhone.length < 9) {
       Alert.alert("Invalid Phone", "Please enter a valid mobile money number.");
+      return;
+    }
+
+    // Detect Vodacom Tanzania prefixes (075, 076, 074)
+    const isVodacom = /^(?:\+?255|0)?(75|76|74)\d{7}$/.test(cleanPhone);
+    if (isVodacom) {
+      Alert.alert(
+        "Network Not Supported", 
+        "Vodacom M-Pesa is not supported right now. Please use Airtel Money, HaloPesa, or Tigo Pesa."
+      );
       return;
     }
     
     setIsProcessing(true);
     try {
       const { data, error } = await supabase.functions.invoke('create-payment', {
-        body: { phoneNumber, credits: creditsToBuy }
+        body: { phoneNumber: cleanPhone, credits: creditsToBuy }
       });
 
       if (error) throw new Error(error.message);
@@ -121,22 +134,23 @@ export default function BuyCreditsScreen() {
   };
 
   return (
-    <BlurView intensity={70} tint="dark" style={[{ flex: 1 }, Platform.OS === 'android' && { backgroundColor: 'rgba(0,0,0,0.85)' }]} experimentalBlurMethod="dimezisBlurView">
+    <View style={{ flex: 1, backgroundColor: '#0A0A0F' }}>
+      <BlurView intensity={70} tint="dark" style={StyleSheet.absoluteFill} />
       <SafeAreaView style={styles.container} edges={['top']}>
         <Stack.Screen options={{ headerShown: false }} />
       
-      <View style={styles.header}>
-        <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
-          <Ionicons name="chevron-back" size={28} color={COLORS.textPrimary} />
-        </TouchableOpacity>
-        <Text style={styles.headerTitle}>Get Credits</Text>
-        <View style={{ width: 28 }} />
-      </View>
-
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-        <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+        <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
           
-          <BlurView intensity={30} tint="dark" style={[styles.balanceCard, Platform.OS === 'android' && { backgroundColor: 'rgba(0,0,0,0.4)' }]} experimentalBlurMethod="dimezisBlurView">
+          <View style={styles.header}>
+            <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
+              <Ionicons name="chevron-back" size={28} color={COLORS.textPrimary} />
+            </TouchableOpacity>
+            <Text style={styles.headerTitle}>Get Credits</Text>
+            <View style={{ width: 28 }} />
+          </View>
+
+          <BlurView intensity={30} tint="dark" style={[styles.balanceCard]}>
             <Ionicons name="diamond" size={32} color={COLORS.gold} />
             <Text style={styles.balanceTitle}>Current Balance</Text>
             <Text style={styles.balanceAmount}>{profile?.credits || 0} Credits</Text>
@@ -165,7 +179,7 @@ export default function BuyCreditsScreen() {
             )}
           </BlurView>
 
-          <BlurView intensity={30} tint="dark" style={[styles.packageCard, Platform.OS === 'android' && { backgroundColor: 'rgba(0,0,0,0.4)' }]} experimentalBlurMethod="dimezisBlurView">
+          <BlurView intensity={30} tint="dark" style={[styles.packageCard]}>
             <View style={styles.packageHeader}>
               <Text style={styles.packageTitle}>Need more credits?</Text>
             </View>
@@ -202,18 +216,24 @@ export default function BuyCreditsScreen() {
             </View>
 
             <TouchableOpacity 
-              style={[styles.payBtn, isProcessing && { opacity: 0.7 }]} 
+              style={[isProcessing && { opacity: 0.7 }, { borderRadius: 12, overflow: 'hidden', marginTop: 20 }]} 
               onPress={handlePayment} 
               disabled={isProcessing}
             >
-              {isProcessing ? (
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-                  <ActivityIndicator color={COLORS.black} />
-                  <Text style={styles.payBtnText}>Waiting for PIN...</Text>
-                </View>
-              ) : (
-                <Text style={styles.payBtnText}>Pay {(parseInt(creditsToBuy) || 1) * 500} TZS</Text>
-              )}
+              <LinearGradient 
+                colors={['#FF2A75', '#FF512F']} 
+                start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} 
+                style={{ padding: 16, alignItems: 'center' }}
+              >
+                {isProcessing ? (
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                    <ActivityIndicator color="#fff" />
+                    <Text style={[styles.payBtnText, { color: '#fff' }]}>Waiting for PIN...</Text>
+                  </View>
+                ) : (
+                  <Text style={[styles.payBtnText, { color: '#fff' }]}>Pay {(parseInt(creditsToBuy) || 1) * 500} TZS</Text>
+                )}
+              </LinearGradient>
             </TouchableOpacity>
 
             <View style={styles.secureWrap}>
@@ -225,16 +245,16 @@ export default function BuyCreditsScreen() {
         </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
-    </BlurView>
+    </View>
   );
 }
 
 const getStyles = (COLORS: any) => StyleSheet.create({
   container: { flex: 1, backgroundColor: 'transparent' },
-  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingTop: 60, paddingBottom: 12 },
+  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 0, paddingTop: 44, paddingBottom: 20 },
   backBtn: { padding: 4, marginLeft: -4 },
   headerTitle: { color: COLORS.textPrimary, fontSize: 18, fontWeight: '700' },
-  content: { padding: 16 },
+  content: { padding: 16, paddingBottom: 40 },
   balanceCard: { alignItems: 'center', padding: 24, borderRadius: 16, marginBottom: 24, overflow: 'hidden' },
   balanceTitle: { color: COLORS.textSecondary, fontSize: 14, marginTop: 12, marginBottom: 4 },
   balanceAmount: { color: COLORS.textPrimary, fontSize: 28, fontWeight: '900' },

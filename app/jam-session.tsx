@@ -3,7 +3,7 @@ import { View, Text, StyleSheet, TouchableOpacity, TextInput, ActivityIndicator,
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import { BlurView } from 'expo-blur';
+import { GlassView as BlurView } from '@/components/GlassView';
 import { useJamStore } from '../store/jamStore';
 import { usePlayerStore } from '../store/playerStore';
 import GlassBackButton from '../components/GlassBackButton';

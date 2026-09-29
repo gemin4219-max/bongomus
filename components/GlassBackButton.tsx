@@ -1,7 +1,7 @@
 import React from 'react';
 import { TouchableOpacity, StyleProp, ViewStyle } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { BlurView } from 'expo-blur';
+import { GlassView as BlurView } from '@/components/GlassView';
 
 interface Props {
   onPress: () => void;

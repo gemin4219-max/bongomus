@@ -23,7 +23,7 @@ import { StatusBar } from 'expo-status-bar';
 import { useAuthStore } from '../store/authStore';
 import { usePlayerStore } from '../store/playerStore';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
-import { ThemeProvider, DarkTheme } from '@react-navigation/native';
+import { ThemeProvider, DarkTheme } from 'expo-router';
 import { StyleSheet } from 'react-native';
 import AnimatedSplash from '../components/AnimatedSplash';
 import ThemeEffects from '../components/ThemeEffects';

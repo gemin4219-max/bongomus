@@ -2,7 +2,7 @@ import React, { useEffect } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import { Image } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
-import { BlurView } from 'expo-blur';
+import { GlassView as BlurView } from '@/components/GlassView';
 import { usePlayerStore } from '../store/playerStore';
 import { useProgress, usePlaybackState, State } from '../store/playerStore';
 import { useRouter } from 'expo-router';

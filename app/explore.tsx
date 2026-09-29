@@ -7,8 +7,10 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { supabase } from '../lib/supabase';
 import { useThemeStore } from '../store/themeStore';
 import { usePlayerStore } from '../store/playerStore';
+import { useAIStore } from '../store/aiStore';
 import { Track } from '../constants';
 import * as Haptics from 'expo-haptics';
+import { useRouter } from 'expo-router';
 
 const { width, height } = Dimensions.get('window');
 
@@ -19,6 +21,8 @@ const ITEM_SPACING = (width - ITEM_WIDTH) / 2;
 export default function ExploreScreen() {
   const { COLORS } = useThemeStore();
   const styles = getStyles(COLORS);
+  const router = useRouter();
+  const setRemixData = useAIStore(s => s.setRemixData);
   
   const [tracks, setTracks] = useState<Track[]>([]);
   const [loading, setLoading] = useState(true);
@@ -197,7 +201,17 @@ export default function ExploreScreen() {
                 <Text style={styles.actionText}>{activeTrack.comment_count || 0}</Text>
               </TouchableOpacity>
               {activeTrack.is_ai && (
-                <TouchableOpacity style={styles.actionPill}>
+                <TouchableOpacity style={styles.actionPill} onPress={() => {
+                  console.log("Remix clicked! Setting data and navigating to AI Studio...");
+                  setRemixData({
+                    audioUrl: activeTrack.audio_url,
+                    title: activeTrack.title,
+                    prompt: '',
+                    tags: ''
+                  });
+                  // Try routing directly to the tab name
+                  router.push('/ai-studio');
+                }}>
                   <Ionicons name="sync-outline" size={18} color="#fff" />
                   <Text style={styles.actionText}>Remix</Text>
                 </TouchableOpacity>

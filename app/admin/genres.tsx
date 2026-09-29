@@ -1,9 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, FlatList, TextInput, TouchableOpacity, Alert, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, FlatList, TextInput, TouchableOpacity, Alert, ActivityIndicator, Image } from 'react-native';
 import { supabase } from '../../lib/supabase';
 import { useThemeStore } from '../../store/themeStore';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
+import * as ImagePicker from 'expo-image-picker';
+import { decode } from 'base64-arraybuffer';
 
 export default function AdminGenresScreen() {
   const { COLORS } = useThemeStore();
@@ -13,6 +15,7 @@ export default function AdminGenresScreen() {
   const [genres, setGenres] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isUploadingImage, setIsUploadingImage] = useState(false);
 
   // Form State
   const [name, setName] = useState('');
@@ -35,14 +38,49 @@ export default function AdminGenresScreen() {
     setLoading(false);
   };
 
+  const pickImage = async () => {
+    try {
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: true,
+        aspect: [1, 1],
+        quality: 0.8,
+        base64: true,
+      });
+
+      if (!result.canceled && result.assets[0].base64) {
+        setIsUploadingImage(true);
+        const fileName = `genres/${Date.now()}.jpg`;
+        const { error } = await supabase.storage.from('covers').upload(
+          fileName,
+          decode(result.assets[0].base64),
+          { contentType: 'image/jpeg' }
+        );
+
+        if (error) throw error;
+        
+        const { data: { publicUrl } } = supabase.storage.from('covers').getPublicUrl(fileName);
+        setImageUrl(publicUrl);
+        setIsUploadingImage(false);
+      }
+    } catch (error: any) {
+      setIsUploadingImage(false);
+      Alert.alert('Upload Error', error.message);
+    }
+  };
+
   const handleAddGenre = async () => {
     if (!name.trim()) return Alert.alert('Error', 'Name is required');
     
+    // Pick a random nice color for the genre
+    const niceColors = ['#FF2A75', '#4A90E2', '#50E3C2', '#F5A623', '#BD10E0', '#7ED321'];
+    const randomColor = niceColors[Math.floor(Math.random() * niceColors.length)];
+
     setIsSubmitting(true);
     const { error } = await supabase.from('genres').insert([{
       name: name.trim(),
-      color: color.trim(),
-      icon: icon.trim(),
+      color: randomColor,
+      icon: 'musical-note',
       image_url: imageUrl.trim() || null
     }]);
 
@@ -89,16 +127,25 @@ export default function AdminGenresScreen() {
             <Text style={styles.label}>Genre Name</Text>
             <TextInput style={styles.input} placeholder="e.g. Bongo Flava" placeholderTextColor={COLORS.textTertiary} value={name} onChangeText={setName} />
             
-            <Text style={styles.label}>Brand Color (Hex)</Text>
-            <TextInput style={styles.input} placeholder="e.g. #FF0000" placeholderTextColor={COLORS.textTertiary} value={color} onChangeText={setColor} />
+            <Text style={styles.label}>Cover Image</Text>
+            <TouchableOpacity 
+              style={[styles.input, { alignItems: 'center', justifyContent: 'center', height: 120, borderStyle: 'dashed' }]} 
+              onPress={pickImage}
+              disabled={isUploadingImage}
+            >
+              {isUploadingImage ? (
+                <ActivityIndicator color={COLORS.gold} />
+              ) : imageUrl ? (
+                <Image source={{ uri: imageUrl }} style={{ width: '100%', height: '100%', borderRadius: 8, resizeMode: 'cover' }} />
+              ) : (
+                <View style={{ alignItems: 'center' }}>
+                  <Ionicons name="image-outline" size={32} color={COLORS.textTertiary} />
+                  <Text style={{ color: COLORS.textTertiary, marginTop: 8 }}>Tap to Upload Image</Text>
+                </View>
+              )}
+            </TouchableOpacity>
             
-            <Text style={styles.label}>Ionicons Icon Name</Text>
-            <TextInput style={styles.input} placeholder="e.g. musical-note" placeholderTextColor={COLORS.textTertiary} value={icon} onChangeText={setIcon} autoCapitalize="none" />
-            
-            <Text style={styles.label}>Cover Image URL (Optional)</Text>
-            <TextInput style={styles.input} placeholder="https://..." placeholderTextColor={COLORS.textTertiary} value={imageUrl} onChangeText={setImageUrl} autoCapitalize="none" />
-            
-            <TouchableOpacity style={styles.submitBtn} onPress={handleAddGenre} disabled={isSubmitting}>
+            <TouchableOpacity style={styles.submitBtn} onPress={handleAddGenre} disabled={isSubmitting || isUploadingImage}>
               {isSubmitting ? <ActivityIndicator color={COLORS.black} /> : <Text style={styles.submitBtnText}>Add Genre</Text>}
             </TouchableOpacity>
           </View>

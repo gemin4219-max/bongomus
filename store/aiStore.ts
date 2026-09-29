@@ -18,17 +18,29 @@ export interface Persona {
   name: string;
   description: string;
   createdAt: number;
+  isFavorite?: boolean;
+}
+
+export interface RemixData {
+  audioUrl: string;
+  title: string;
+  prompt: string;
+  tags: string;
 }
 
 interface AIStore {
   tasks: AISongTask[];
   personas: Persona[];
+  remixData: RemixData | null;
+  setRemixData: (data: RemixData | null) => void;
   addTask: (taskId: string, title: string, taskType?: 'GENERATE' | 'VOCAL_REMOVAL') => void;
   updateTask: (taskId: string, status: SunoTaskStatus, tracks?: SunoAudioData[], failReason?: string) => void;
   updateTrack: (taskId: string, trackId: string, updates: Partial<SunoAudioData>) => void;
   removeTask: (taskId: string) => void;
   addPersona: (persona: Persona) => void;
   removePersona: (id: string) => void;
+  togglePersonaFavorite: (id: string) => void;
+  setTasks: (tasks: AISongTask[]) => void;
 }
 
 export const useAIStore = create<AIStore>()(
@@ -36,6 +48,8 @@ export const useAIStore = create<AIStore>()(
     (set) => ({
       tasks: [],
       personas: [],
+      remixData: null,
+      setRemixData: (data) => set({ remixData: data }),
       addTask: (taskId, title, taskType) => set((state) => ({
         tasks: [{ taskId, title, status: 'PENDING', createdAt: Date.now(), taskType: taskType || 'GENERATE' }, ...state.tasks]
       })),
@@ -60,6 +74,16 @@ export const useAIStore = create<AIStore>()(
       removePersona: (id) => set((state) => ({
         personas: state.personas.filter(p => p.id !== id)
       })),
+      togglePersonaFavorite: (id) => set((state) => ({
+        personas: state.personas.map(p => p.id === id ? { ...p, isFavorite: !p.isFavorite } : p)
+      })),
+      setTasks: (newTasks) => set((state) => {
+        // Keep pending/generating tasks, merge with new tasks (prefer new ones for completed)
+        const pendingTasks = state.tasks.filter(t => t.status !== 'SUCCESS' && t.status !== 'ERROR');
+        const pendingIds = new Set(pendingTasks.map(t => t.taskId));
+        const filteredNewTasks = newTasks.filter(t => !pendingIds.has(t.taskId));
+        return { tasks: [...pendingTasks, ...filteredNewTasks] };
+      }),
     }),
     {
       name: 'ai-storage',

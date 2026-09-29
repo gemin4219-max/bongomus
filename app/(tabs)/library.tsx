@@ -29,6 +29,7 @@ export default function LibraryScreen() {
   const [tab, setTab] = useState<'ai_songs' | 'liked' | 'playlists' | 'uploads' | 'downloads'>('ai_songs');
   const [uploads, setUploads] = useState<Track[]>([]);
   const [playlists, setPlaylists] = useState<any[]>([]);
+  const [aiTracks, setAiTracks] = useState<Track[]>([]);
   
   const { tasks } = useAIStore();
   const [isPublishing, setIsPublishing] = useState<Record<string, boolean>>({});
@@ -105,6 +106,9 @@ export default function LibraryScreen() {
       } else if (tab === 'uploads') {
         const { data } = await supabase.from('tracks').select('*, profile:profiles!tracks_user_id_fkey(*)').eq('user_id', session.user.id).order('created_at', { ascending: false });
         if (data) setUploads(data as Track[]);
+      } else if (tab === 'ai_songs') {
+        const { data } = await supabase.from('tracks').select('*, profile:profiles!tracks_user_id_fkey(*)').eq('user_id', session.user.id).eq('is_ai', true).order('created_at', { ascending: false });
+        if (data) setAiTracks(data as Track[]);
       }
     } catch (error) {
       console.log("Offline or network error fetching library", error);
@@ -238,28 +242,43 @@ export default function LibraryScreen() {
 
       {tab === 'ai_songs' ? (
         <ScrollView style={{ flex: 1, paddingHorizontal: 16 }} contentContainerStyle={{ paddingBottom: 160 }}>
-          {tasks.length === 0 ? (
+          {tasks.length === 0 && aiTracks.length === 0 ? (
             <View style={styles.empty}>
               <Ionicons name="folder-open-outline" size={64} color="rgba(255,255,255,0.2)" />
               <Text style={styles.emptyText}>Your workspace is empty.</Text>
             </View>
           ) : (
-            tasks.map(task => (
-              <TaskItem 
-                key={task.taskId} 
-                task={task} 
-                isPublishing={isPublishing} 
-                setIsPublishing={setIsPublishing} 
-                isDownloading={isDownloading} 
-                setIsDownloading={setIsDownloading} 
-                isGeneratingVideo={isGeneratingVideo} 
-                setIsGeneratingVideo={setIsGeneratingVideo} 
-                isSeparating={isSeparating} 
-                setIsSeparating={setIsSeparating} 
-                openPersonaModal={(id, taskId) => router.push(`/ai-studio?tool=Personas&audioId=${id}&taskId=${taskId}`)} 
-                openExtendModal={(id, title) => {}} 
-              />
-            ))
+            <>
+              {tasks.map(task => (
+                <TaskItem 
+                  key={task.taskId} 
+                  task={task} 
+                  isPublishing={isPublishing} 
+                  setIsPublishing={setIsPublishing} 
+                  isDownloading={isDownloading} 
+                  setIsDownloading={setIsDownloading} 
+                  isGeneratingVideo={isGeneratingVideo} 
+                  setIsGeneratingVideo={setIsGeneratingVideo} 
+                  isSeparating={isSeparating} 
+                  setIsSeparating={setIsSeparating} 
+                  openPersonaModal={(id, taskId) => router.push(`/ai-studio?tool=Personas&audioId=${id}&taskId=${taskId}`)} 
+                  openExtendModal={(id, title) => {}} 
+                />
+              ))}
+              {aiTracks.filter(track => !tasks.some(t => t.tracks?.some(sunoTrack => track.audio_url?.includes(sunoTrack.id)))).map(track => (
+                <TrackItem
+                  key={`cloud_ai_${track.id}`}
+                  track={track}
+                  isPlaying={currentTrack?.id === track.id}
+                  onPress={() => {
+                    playTrack(track, aiTracks);
+                    router.push('/player');
+                  }}
+                  onArtistPress={() => router.push({ pathname: '/artist/[id]', params: { id: track.user_id } })}
+                  onDelete={() => handleDeleteTrack(track)}
+                />
+              ))}
+            </>
           )}
         </ScrollView>
       ) : loading ? (

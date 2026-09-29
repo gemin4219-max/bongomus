@@ -252,6 +252,67 @@ export function TaskItem({ task, isPublishing, setIsPublishing, isDownloading, s
     }
   };
 
+  const handleAutoPublish = async (taskId: string, tracks: SunoAudioData[], title: string) => {
+    for (const track of tracks) {
+      if ((track as any).isPublished) continue;
+
+      try {
+        const { session, profile } = useAuthStore.getState();
+        if (!session) continue;
+
+        let targetAudioUrl = track.audioUrl || (track as any).streamAudioUrl || (track as any).sourceAudioUrl;
+        let targetCoverUrl = track.imageUrl;
+
+        if (!targetAudioUrl || targetAudioUrl.startsWith('file://')) continue;
+
+        const localAudioUri = FileSystem.cacheDirectory + `auto_publish_${track.id}.mp3`;
+        await FileSystem.downloadAsync(targetAudioUrl, localAudioUri);
+
+        let localCoverUri = '';
+        if (targetCoverUrl) {
+          localCoverUri = FileSystem.cacheDirectory + `auto_publish_${track.id}.jpg`;
+          await FileSystem.downloadAsync(targetCoverUrl, localCoverUri);
+        }
+
+        const audioBase64 = await FileSystem.readAsStringAsync(localAudioUri, { encoding: FileSystem.EncodingType.Base64 });
+        const { error: audioErr } = await supabase.storage.from('audio').upload(`ai_tracks/${track.id}.mp3`, decode(audioBase64), { contentType: 'audio/mpeg', upsert: true });
+        if (audioErr) continue;
+
+        let coverPublicUrl = '';
+        if (localCoverUri) {
+          const coverBase64 = await FileSystem.readAsStringAsync(localCoverUri, { encoding: FileSystem.EncodingType.Base64 });
+          const { error: coverErr } = await supabase.storage.from('images').upload(`ai_covers/${track.id}.jpg`, decode(coverBase64), { contentType: 'image/jpeg', upsert: true });
+          if (!coverErr) {
+            coverPublicUrl = supabase.storage.from('images').getPublicUrl(`ai_covers/${track.id}.jpg`).data.publicUrl;
+          }
+        }
+
+        const audioPublicUrl = supabase.storage.from('audio').getPublicUrl(`ai_tracks/${track.id}.mp3`).data.publicUrl;
+
+        const { data: existing } = await supabase.from('tracks').select('id').eq('audio_url', audioPublicUrl).maybeSingle();
+
+        if (!existing) {
+          await supabase.from('tracks').insert({
+            user_id: session.user.id,
+            artist_name: profile?.display_name || session.user.user_metadata?.display_name || 'AI Artist',
+            title: track.title || title,
+            audio_url: audioPublicUrl,
+            cover_url: coverPublicUrl,
+            lyrics: track.prompt || null,
+            duration_sec: Math.floor(track.duration || 0),
+            play_count: 0,
+            is_public: true,
+            is_ai: true,
+          });
+        }
+
+        updateTrack(taskId, track.id, { isPublished: true } as any);
+      } catch (e) {
+        console.log("Auto-publish failed for track", track.id, e);
+      }
+    }
+  };
+
   useEffect(() => {
     let interval: ReturnType<typeof setInterval>;
     
@@ -284,6 +345,7 @@ export function TaskItem({ task, isPublishing, setIsPublishing, isDownloading, s
              const mappedData = info.data.map((t: any) => ({ ...t, audioUrl: t.audioUrl || t.streamAudioUrl || t.sourceAudioUrl }));
              updateTask(task.taskId, 'SUCCESS', mappedData);
              handleAutoDownload(task.taskId, mappedData);
+             handleAutoPublish(task.taskId, mappedData, task.title);
           } else if (info.status === 'SENSITIVE_WORD_ERROR') {
              updateTask(task.taskId, 'SENSITIVE_WORD_ERROR');
              refundCredit();
@@ -314,6 +376,7 @@ export function TaskItem({ task, isPublishing, setIsPublishing, isDownloading, s
         const mappedData = info.data.map((t: any) => ({ ...t, audioUrl: t.audioUrl || t.streamAudioUrl || t.sourceAudioUrl }));
         updateTask(task.taskId, 'SUCCESS', mappedData);
         handleAutoDownload(task.taskId, mappedData);
+        handleAutoPublish(task.taskId, mappedData, task.title);
       } else if (info.status === 'SENSITIVE_WORD_ERROR') {
         updateTask(task.taskId, 'SENSITIVE_WORD_ERROR');
         refundCredit();

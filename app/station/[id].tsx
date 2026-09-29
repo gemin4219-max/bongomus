@@ -448,7 +448,7 @@ export default function StationRoomScreen() {
       </View>
 
       {/* Search Modal */}
-      <Modal visible={isSearchVisible} animationType="slide" presentationStyle="formSheet" onRequestClose={() => setIsSearchVisible(false)}>
+      <Modal visible={isSearchVisible} animationType="slide" presentationStyle={Platform.OS === 'ios' ? 'formSheet' : 'fullScreen'} onRequestClose={() => setIsSearchVisible(false)}>
         <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={[styles.modalContainer, { backgroundColor: '#111' }]}>
           <View style={styles.modalHeader}>
             <Text style={styles.modalTitle}>Load Track to Deck</Text>

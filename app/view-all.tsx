@@ -67,7 +67,7 @@ export default function ViewAllScreen() {
     if (type === 'trending' || type === 'trending-now' || type === 'staff-picks') return q.order('play_count', { ascending: false });
     if (type === 'ai-studio') return q.eq('is_ai', true).order('play_count', { ascending: false });
     if (type === 'new-releases') return q.order('created_at', { ascending: false });
-    if (type === 'category' && id) return q.eq('genre', id).order('play_count', { ascending: false });
+    if (type === 'category' && id) return q.ilike('genre', `%${id}%`).order('play_count', { ascending: false });
     return q.order('play_count', { ascending: false });
   };
 

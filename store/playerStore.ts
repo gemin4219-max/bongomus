@@ -1,7 +1,17 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import TrackPlayer, { Event, State as TPState, AppKilledPlaybackBehavior, Capability, IOSCategory, IOSCategoryMode, IOSCategoryOptions, PitchAlgorithm } from 'react-native-track-player';
+import TrackPlayer, { 
+  Event, 
+  State as TPState, 
+  AppKilledPlaybackBehavior, 
+  Capability, 
+  IOSCategory, 
+  IOSCategoryMode, 
+  IOSCategoryOptions, 
+  PitchAlgorithm 
+} from 'react-native-track-player';
+
 import { Track } from '../constants';
 import { useOfflineStore } from './offlineStore';
 import { useAuthStore } from './authStore';
@@ -139,7 +149,7 @@ export const usePlayerStore = create<PlayerStore>()(
     if (get().isPlayerReady) return;
     try {
       try {
-        const { Audio, InterruptionModeIOS, InterruptionModeAndroid } = require('expo-av');
+        const { InterruptionModeIOS, InterruptionModeAndroid } = { InterruptionModeIOS: { DoNotMix: 0 }, InterruptionModeAndroid: { DoNotMix: 0 } };
         await Audio.setAudioModeAsync({ 
           allowsRecordingIOS: false,
           staysActiveInBackground: true, 

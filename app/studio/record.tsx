@@ -59,7 +59,22 @@ export default function RecordScreen() {
   const cleanup = async () => {
     if (beatSoundRef.current) await beatSoundRef.current.unloadAsync();
     if (vocalSoundRef.current) await vocalSoundRef.current.unloadAsync();
-    if (recording) await recording.stopAndUnloadAsync();
+    if (recording) {
+      try {
+        await recording.stopAndUnloadAsync();
+      } catch (e) {}
+    }
+    
+    // Crucial for iOS: Return audio mode to playback so TrackPlayer isn't muffled!
+    try {
+      await Audio.setAudioModeAsync({
+        allowsRecordingIOS: false,
+        playsInSilentModeIOS: true,
+        playThroughEarpieceAndroid: false,
+      });
+    } catch (e) {
+      console.warn('Error resetting audio mode:', e);
+    }
   };
 
   const startRecording = async () => {

@@ -1,9 +1,9 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Dimensions, ActivityIndicator, Modal, Alert, Animated, Easing, PanResponder } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, Dimensions, ActivityIndicator, Modal, Alert, Animated, Easing, PanResponder, TextInput, KeyboardAvoidingView, Platform } from 'react-native';
 import { Image } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
-import { BlurView } from 'expo-blur';
+import { GlassView as BlurView } from '@/components/GlassView';
 import { useRouter } from 'expo-router';
 import Slider from '@react-native-community/slider';
 import * as FileSystem from 'expo-file-system/legacy';
@@ -12,6 +12,7 @@ import * as ScreenCapture from 'expo-screen-capture';
 import { captureRef } from 'react-native-view-shot';
 import * as MediaLibrary from 'expo-media-library';
 import { usePlayerStore } from '../store/playerStore';
+import { useAIStore } from '../store/aiStore';
 import { useOfflineStore } from '../store/offlineStore';
 import { useThemeStore, VinylThemeType } from '../store/themeStore';
 import { useAuthStore } from '../store/authStore';
@@ -268,6 +269,7 @@ export default function PlayerScreen() {
   const [showCommentsModal, setShowCommentsModal] = useState(false);
   const [showPlaylistModal, setShowPlaylistModal] = useState(false);
   const [myPlaylists, setMyPlaylists] = useState<any[]>([]);
+  const [remixPrompt, setRemixPrompt] = useState('');
   const [loadingPlaylists, setLoadingPlaylists] = useState(false);
   const [showLyrics, setShowLyrics] = useState(false);
   const [showShareModal, setShowShareModal] = useState(false);
@@ -387,12 +389,25 @@ export default function PlayerScreen() {
 
   const handleReport = () => {
     Alert.alert(
-      "Ripoti Hakimiliki",
-      "Je, wimbo huu unatumia kazi yako bila ruhusa? (Report Copyright Infringement)",
+      "Ripoti Wimbo (Report Track)",
+      "Tatizo ni nini na huu wimbo? (What is the issue?)",
       [
-        { text: "Hapana", style: "cancel" },
+        { text: "Ghairi (Cancel)", style: "cancel" },
         { 
-          text: "Ndiyo, Ripoti", 
+          text: "Aina Sio Sahihi (Incorrect Genre)", 
+          onPress: () => {
+            if (!session) {
+              Alert.alert("Kosa", "Tafadhali ingia ili kuripoti.");
+              return;
+            }
+            Alert.alert(
+              "Imetumwa kwa AI (Flagged for AI Review)", 
+              "Asante! Tutatumia AI yetu na kura za jamii kuchunguza kama huu wimbo ni wa aina sahihi (e.g. Gospel)."
+            );
+          }
+        },
+        { 
+          text: "Hakimiliki (Copyright)", 
           style: "destructive",
           onPress: async () => {
             if (!session) {
@@ -929,17 +944,83 @@ export default function PlayerScreen() {
       {/* Glassmorphic controls panel at bottom */}
       <BlurView intensity={30} tint="dark" style={{ marginTop: 8, marginHorizontal: 0, overflow: 'hidden', borderTopWidth: 1, borderTopColor: 'rgba(255,255,255,0.08)' }}>
         <View style={{ padding: 24, paddingBottom: 100, backgroundColor: 'rgba(0,0,0,0.25)' }}>
-          {/* Lyrics Section */}
-          <View style={{ marginBottom: 40 }}>
-            <Text style={{ color: '#fff', fontSize: 20, fontWeight: '800', marginBottom: 16 }}>Lyrics</Text>
-            <BlurView intensity={20} tint="dark" style={{ padding: 20, borderRadius: 16, overflow: 'hidden' }}>
-              <Text style={{ color: COLORS.textSecondary, fontSize: 16, lineHeight: 24, fontWeight: '500' }}>
-                {currentTrack.lyrics || currentTrack.lyrics_swahili || currentTrack.lyrics_english || "Lyrics aren't available for this song yet. Check back later!"}
-              </Text>
-            </BlurView>
-          </View>
+          {/* Lyrics Section & AI Song Section */}
+          <View style={{ marginBottom: currentTrack?.is_ai ? 120 : 40 }}>
+            {currentTrack?.is_ai ? (
+              <>
+                {/* About this song Card */}
+                <View style={{ backgroundColor: 'rgba(255,255,255,0.03)', borderRadius: 24, padding: 20, marginBottom: 16, borderWidth: 1, borderColor: 'rgba(255,255,255,0.06)' }}>
+                  <Text style={{ color: '#fff', fontSize: 16, fontWeight: '700', marginBottom: 8 }}>About this song</Text>
+                  <Text style={{ color: 'rgba(255,255,255,0.6)', fontSize: 14 }}>
+                    Created on {new Date(currentTrack.created_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}
+                  </Text>
+                </View>
 
-          {/* Up Next Section */}
+                {/* Style Description Card */}
+                <View style={{ backgroundColor: 'rgba(255,255,255,0.03)', borderRadius: 24, padding: 20, marginBottom: 16, borderWidth: 1, borderColor: 'rgba(255,255,255,0.06)' }}>
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+                    <Text style={{ color: '#fff', fontSize: 16, fontWeight: '700' }}>Style Description</Text>
+                    <View style={{ flexDirection: 'row', gap: 8 }}>
+                      <TouchableOpacity style={{ backgroundColor: 'rgba(255,255,255,0.08)', borderRadius: 16, padding: 8 }}>
+                        <Ionicons name="musical-notes-outline" size={16} color="rgba(255,255,255,0.6)" />
+                      </TouchableOpacity>
+                      <TouchableOpacity style={{ backgroundColor: 'rgba(255,255,255,0.08)', borderRadius: 16, padding: 8 }}>
+                        <Ionicons name="copy-outline" size={16} color="rgba(255,255,255,0.6)" />
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                  
+                  <Text style={{ color: '#fff', fontSize: 15, lineHeight: 24, marginBottom: 20, fontWeight: '500' }}>
+                    {(currentTrack as any).ai_prompt || currentTrack.description || "No style description available."}
+                  </Text>
+                  
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 12 }}>
+                    <Text style={{ color: '#fff', fontSize: 15 }}>Weirdness</Text>
+                    <Text style={{ color: 'rgba(255,255,255,0.6)', fontSize: 15 }}>{(currentTrack as any).ai_weirdness || '50%'}</Text>
+                  </View>
+                  
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 16 }}>
+                    <Text style={{ color: '#fff', fontSize: 15 }}>Style Influence</Text>
+                    <Text style={{ color: 'rgba(255,255,255,0.6)', fontSize: 15 }}>{(currentTrack as any).ai_influence || '50%'}</Text>
+                  </View>
+                  
+                  <View style={{ height: 1, backgroundColor: 'rgba(255,255,255,0.08)', marginBottom: 16 }} />
+                  
+                  <TouchableOpacity>
+                    <Text style={{ color: 'rgba(255,255,255,0.5)', fontSize: 14, textAlign: 'center', fontWeight: '500' }}>See Less</Text>
+                  </TouchableOpacity>
+                </View>
+
+                {/* Lyrics Card */}
+                <View style={{ backgroundColor: 'rgba(255,255,255,0.03)', borderRadius: 24, padding: 20, marginBottom: 16, borderWidth: 1, borderColor: 'rgba(255,255,255,0.06)' }}>
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+                    <Text style={{ color: '#fff', fontSize: 16, fontWeight: '700' }}>Lyrics</Text>
+                    <View style={{ flexDirection: 'row', gap: 8 }}>
+                      <TouchableOpacity style={{ backgroundColor: 'rgba(255,255,255,0.08)', borderRadius: 16, padding: 8 }}>
+                        <Ionicons name="musical-notes-outline" size={16} color="rgba(255,255,255,0.6)" />
+                      </TouchableOpacity>
+                      <TouchableOpacity style={{ backgroundColor: 'rgba(255,255,255,0.08)', borderRadius: 16, padding: 8 }}>
+                        <Ionicons name="copy-outline" size={16} color="rgba(255,255,255,0.6)" />
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                  <Text style={{ color: '#fff', fontSize: 16, lineHeight: 28, fontWeight: '500' }}>
+                    {currentTrack.lyrics || currentTrack.lyrics_swahili || currentTrack.lyrics_english || "Lyrics aren't available for this song yet. Check back later!"}
+                  </Text>
+                </View>
+              </>
+            ) : (
+              <>
+                <Text style={{ color: '#fff', fontSize: 20, fontWeight: '800', marginBottom: 16 }}>Lyrics</Text>
+                <BlurView intensity={20} tint="dark" style={{ padding: 20, borderRadius: 16, overflow: 'hidden' }}>
+                  <Text style={{ color: COLORS.textSecondary, fontSize: 16, lineHeight: 24, fontWeight: '500' }}>
+                    {currentTrack.lyrics || currentTrack.lyrics_swahili || currentTrack.lyrics_english || "Lyrics aren't available for this song yet. Check back later!"}
+                  </Text>
+                </BlurView>
+              </>
+            )}
+          </View>
+{/* Up Next Section */}
           <View>
             <Text style={{ color: '#fff', fontSize: 20, fontWeight: '800', marginBottom: 16 }}>Up Next</Text>
             {queue.slice(0, 10).map((item, idx) => (
@@ -974,6 +1055,9 @@ export default function PlayerScreen() {
         </View>
       </BlurView>
       </ScrollView>
+
+
+
 
       {/* Sleep Timer Modal */}
       <Modal visible={showSleepTimer} transparent animationType="slide">
@@ -1039,10 +1123,13 @@ export default function PlayerScreen() {
                     <Text style={{ color: playbackRate > 1.2 ? COLORS.gold : COLORS.textSecondary, fontSize: 14, fontWeight: '600' }}>Chipmunk</Text>
                   </TouchableOpacity>
                   
-                  <TouchableOpacity onPress={() => setPlaybackRate(0.7)} style={{ paddingHorizontal: 16, paddingVertical: 10, borderRadius: 12, backgroundColor: playbackRate < 0.9 ? 'rgba(212,175,55,0.2)' : 'rgba(255,255,255,0.05)', borderWidth: 1, borderColor: playbackRate < 0.9 ? 'rgba(212,175,55,0.5)' : 'rgba(255,255,255,0.1)' }}>
-                    <Text style={{ color: playbackRate < 0.9 ? COLORS.gold : COLORS.textSecondary, fontSize: 14, fontWeight: '600' }}>Deep Voice</Text>
+                  <TouchableOpacity onPress={() => setPlaybackRate(0.7)} style={{ paddingHorizontal: 16, paddingVertical: 10, borderRadius: 12, backgroundColor: playbackRate === 0.7 ? 'rgba(212,175,55,0.2)' : 'rgba(255,255,255,0.05)', borderWidth: 1, borderColor: playbackRate === 0.7 ? 'rgba(212,175,55,0.5)' : 'rgba(255,255,255,0.1)' }}>
+                    <Text style={{ color: playbackRate === 0.7 ? COLORS.gold : COLORS.textSecondary, fontSize: 14, fontWeight: '600' }}>Deep Voice</Text>
                   </TouchableOpacity>
                   
+                  <TouchableOpacity onPress={() => setPlaybackRate(0.85)} style={{ paddingHorizontal: 16, paddingVertical: 10, borderRadius: 12, backgroundColor: playbackRate === 0.85 ? 'rgba(0,191,255,0.2)' : 'rgba(255,255,255,0.05)', borderWidth: 1, borderColor: playbackRate === 0.85 ? 'rgba(0,191,255,0.5)' : 'rgba(255,255,255,0.1)' }}>
+                    <Text style={{ color: playbackRate === 0.85 ? '#00bfff' : COLORS.textSecondary, fontSize: 14, fontWeight: '600' }}>Underwater</Text>
+                  </TouchableOpacity>
                   <TouchableOpacity onPress={() => setPlaybackRate(1.0)} style={{ paddingHorizontal: 16, paddingVertical: 10, borderRadius: 12, backgroundColor: playbackRate === 1.0 ? 'rgba(212,175,55,0.2)' : 'rgba(255,255,255,0.05)', borderWidth: 1, borderColor: playbackRate === 1.0 ? 'rgba(212,175,55,0.5)' : 'rgba(255,255,255,0.1)' }}>
                     <Text style={{ color: playbackRate === 1.0 ? COLORS.gold : COLORS.textSecondary, fontSize: 14, fontWeight: '600' }}>Normal</Text>
                   </TouchableOpacity>

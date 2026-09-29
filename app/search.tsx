@@ -7,7 +7,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase } from '../lib/supabase';
 import { useThemeStore } from '../store/themeStore';
 import { LinearGradient } from 'expo-linear-gradient';
-import { BlurView } from 'expo-blur';
+import { GlassView as BlurView } from '@/components/GlassView';
 import { Track, Profile, GENRES } from '../constants';
 import { usePlayerStore } from '../store/playerStore';
 import TrackItem from '../components/TrackItem';

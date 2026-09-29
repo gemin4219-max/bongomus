@@ -9,7 +9,7 @@ import { Ionicons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
 import AppBannerAd from '../../components/ads/AppBannerAd';
 import { useRouter } from 'expo-router';
-import { BlurView } from 'expo-blur';
+import { GlassView as BlurView } from '@/components/GlassView';
 import { supabase } from '../../lib/supabase';
 import { useThemeStore } from '../../store/themeStore';
 import { GENRES, Track, Profile, Playlist } from '../../constants';
@@ -106,6 +106,7 @@ export default function HomeScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [selectedRegion, setSelectedRegion] = useState('All');
+  const [selectedGenre, setSelectedGenre] = useState('All');
   const [recentlyPlayed, setRecentlyPlayed] = useState<Track[]>([]);
   const [autoPlaylists, setAutoPlaylists] = useState<{ id: string, title: string, subtitle: string, colors: string[], tracks: Track[] }[]>([]);
   
@@ -605,13 +606,24 @@ export default function HomeScreen() {
     return count.toString();
   };
 
+  const filterByGenre = (tracks: Track[]) => {
+    if (selectedGenre === 'All') return tracks;
+    return tracks.filter(t => t.genre?.toLowerCase() === selectedGenre.toLowerCase());
+  };
+
+  const displayTrending = filterByGenre(trending);
+  const displayRecentlyPlayed = filterByGenre(recentlyPlayed);
+  const displayFeatured = filterByGenre(featured);
+  const displayNewReleases = filterByGenre(newReleases);
+  const displayAiTracks = filterByGenre(aiTracks);
+
   const staffPicksChunks = [];
-  for (let i = 0; i < trending.length; i += 3) {
-    staffPicksChunks.push(trending.slice(i, i + 3));
+  for (let i = 0; i < displayTrending.length; i += 3) {
+    staffPicksChunks.push(displayTrending.slice(i, i + 3));
   }
 
   const jumpBackChunks = [];
-  const jumpSource = recentlyPlayed.length > 0 ? recentlyPlayed : featured.slice(1);
+  const jumpSource = displayRecentlyPlayed.length > 0 ? displayRecentlyPlayed : displayFeatured.slice(1);
   for (let i = 0; i < jumpSource.length; i += 3) {
     jumpBackChunks.push(jumpSource.slice(i, i + 3));
   }
@@ -652,7 +664,9 @@ export default function HomeScreen() {
           }
         >
           <DailyShuffler>
-            
+
+
+
             {/* AI Studio CTA Banner */}
             <AiStudioBanner onPress={() => router.push('/ai-studio')} />
 
@@ -667,7 +681,7 @@ export default function HomeScreen() {
                 {staffPicksChunks.map((chunk, index) => (
                   <View key={index} style={{ width: width * 0.9, paddingRight: 16 }}>
                     {chunk.map(track => (
-                      <TouchableOpacity key={track.id} style={styles.staffPickRow} onPress={() => { playTrack(track, trending); router.push('/player'); }}>
+                      <TouchableOpacity key={track.id} style={styles.staffPickRow} onPress={() => { playTrack(track, displayTrending); router.push('/player'); }}>
                         <View style={styles.staffPickCoverWrap}>
                           <Image source={{ uri: track.cover_url || undefined }} style={styles.staffPickCover} />
                           <View style={styles.durationBadge}>
@@ -695,15 +709,15 @@ export default function HomeScreen() {
           )}
 
           {/* Made in AI Studio (AI Tracks) */}
-          {aiTracks.length > 0 && (
+          {displayAiTracks.length > 0 && (
             <View style={styles.section}>
               <View style={styles.sectionHeader}>
                 <Text style={styles.sectionTitle}>Made in AI Studio</Text>
                 <TouchableOpacity onPress={() => router.push('/view-all?type=ai-studio')}><Text style={styles.seeAll}>See All</Text></TouchableOpacity>
               </View>
               <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingLeft: 16 }}>
-                {aiTracks.map(track => (
-                  <TouchableOpacity key={track.id} style={styles.sunoCard} onPress={() => { playTrack(track, aiTracks); router.push('/player'); }}>
+                {displayAiTracks.map(track => (
+                  <TouchableOpacity key={track.id} style={styles.sunoCard} onPress={() => { playTrack(track, displayAiTracks); router.push('/player'); }}>
                     <View style={styles.sunoCoverWrap}>
                       <Image source={{ uri: track.cover_url || undefined }} style={styles.sunoCover} />
                       <View style={styles.sunoDurationBadge}>
@@ -764,15 +778,15 @@ export default function HomeScreen() {
           )}
 
           {/* New Releases */}
-          {newReleases.length > 0 && (
+          {displayNewReleases.length > 0 && (
             <View style={styles.section}>
               <View style={styles.sectionHeader}>
                 <Text style={styles.sectionTitle}>New Releases</Text>
                 <TouchableOpacity onPress={() => router.push('/view-all?type=new-releases')}><Text style={styles.seeAll}>See All</Text></TouchableOpacity>
               </View>
               <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingLeft: 16 }}>
-                {newReleases.map(track => (
-                  <TouchableOpacity key={track.id} style={styles.sunoCard} onPress={() => { playTrack(track, newReleases); router.push('/player'); }}>
+                {displayNewReleases.map(track => (
+                  <TouchableOpacity key={track.id} style={styles.sunoCard} onPress={() => { playTrack(track, displayNewReleases); router.push('/player'); }}>
                     <View style={styles.sunoCoverWrap}>
                       <Image source={{ uri: track.cover_url || undefined }} style={styles.sunoCover} />
                       <View style={styles.sunoDurationBadge}>
@@ -794,15 +808,15 @@ export default function HomeScreen() {
             </View>
           )}
           {/* Trending Now */}
-          {trending.length > 0 && (
+          {displayTrending.length > 0 && (
             <View style={styles.section}>
               <View style={styles.sectionHeader}>
                 <Text style={styles.sectionTitle}>Trending Now</Text>
                 <TouchableOpacity onPress={() => router.push('/view-all?type=trending-now')}><Text style={styles.seeAll}>See All</Text></TouchableOpacity>
               </View>
               <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingLeft: 16 }}>
-                {trending.slice(0, 10).map(track => (
-                  <TouchableOpacity key={track.id} style={styles.sunoCard} onPress={() => { playTrack(track, trending); router.push('/player'); }}>
+                {displayTrending.slice(0, 10).map(track => (
+                  <TouchableOpacity key={track.id} style={styles.sunoCard} onPress={() => { playTrack(track, displayTrending); router.push('/player'); }}>
                     <View style={styles.sunoCoverWrap}>
                       <Image source={{ uri: track.cover_url || undefined }} style={styles.sunoCover} />
                       <View style={styles.sunoDurationBadge}>
@@ -825,15 +839,15 @@ export default function HomeScreen() {
           )}
 
           {/* Top Charts - list style */}
-          {featured.length > 0 && (
+          {displayFeatured.length > 0 && (
             <View style={styles.section}>
               <View style={styles.sectionHeader}>
                 <Text style={styles.sectionTitle}>Top Charts</Text>
                 <TouchableOpacity onPress={() => router.push('/view-all?type=trending')}><Text style={styles.seeAll}>See All</Text></TouchableOpacity>
               </View>
               <View style={{ paddingHorizontal: 16 }}>
-                {featured.slice(0, 5).map((track, i) => (
-                  <TouchableOpacity key={track.id} style={styles.staffPickRow} onPress={() => { playTrack(track, featured); router.push('/player'); }}>
+                {displayFeatured.slice(0, 5).map((track, i) => (
+                  <TouchableOpacity key={track.id} style={styles.staffPickRow} onPress={() => { playTrack(track, displayFeatured); router.push('/player'); }}>
                     <Text style={{ color: 'rgba(255,255,255,0.3)', fontSize: 18, fontWeight: '700', width: 28, marginRight: 8 }}>{i + 1}</Text>
                     <View style={styles.staffPickCoverWrap}>
                       <Image source={{ uri: track.cover_url || undefined }} style={styles.staffPickCover} />

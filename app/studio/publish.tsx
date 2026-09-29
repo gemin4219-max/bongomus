@@ -6,7 +6,7 @@ import { useAuthStore } from '../../store/authStore';
 import { useThemeStore } from '../../store/themeStore';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import GlassBackButton from '../../components/GlassBackButton';
-import * as FileSystem from 'expo-file-system';
+import * as FileSystem from 'expo-file-system/legacy';
 import { decode } from 'base64-arraybuffer';
 
 export default function PublishScreen() {
