@@ -1571,6 +1571,58 @@ export default function AIStudioScreen() {
                     >
                       <Ionicons name="add" size={18} color="#FFF" />
                     </TouchableOpacity>
+                    
+                    {/* ── Voice Persona Selector Chip ── */}
+                    {personas.length > 0 && (
+                      <TouchableOpacity
+                        style={[
+                          styles.chip,
+                          selectedPersonaId && {
+                            backgroundColor: "rgba(130, 80, 255, 0.35)",
+                            borderColor: "#8250FF",
+                            borderWidth: 1.5,
+                            shadowColor: "#8250FF",
+                            shadowOffset: { width: 0, height: 0 },
+                            shadowOpacity: 0.9,
+                            shadowRadius: 12,
+                            elevation: 10,
+                          },
+                        ]}
+                        onPress={() => setIsPersonaModalOpen(true)}
+                      >
+                        <Ionicons
+                          name="mic-outline"
+                          size={15}
+                          color={selectedPersonaId ? "#C8A8FF" : "rgba(255,255,255,0.7)"}
+                          style={{ marginRight: 5 }}
+                        />
+                        <Text
+                          style={[
+                            styles.chipText,
+                            selectedPersonaId && { color: "#C8A8FF" },
+                          ]}
+                          numberOfLines={1}
+                        >
+                          {selectedPersonaId
+                            ? (personas.find((p: any) => p.id === selectedPersonaId)?.name ?? "Voice")
+                            : "Voice"}
+                        </Text>
+                        {selectedPersonaId && (
+                          <TouchableOpacity
+                            onPress={() => setSelectedPersonaId(null)}
+                            style={{ marginLeft: 5 }}
+                            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                          >
+                            <Ionicons
+                              name="close"
+                              size={13}
+                              color="rgba(200,168,255,0.7)"
+                            />
+                          </TouchableOpacity>
+                        )}
+                      </TouchableOpacity>
+                    )}
+
                     <TouchableOpacity
                       style={[
                         styles.chip,
@@ -1647,6 +1699,7 @@ export default function AIStudioScreen() {
                         </>
                       )}
                     </TouchableOpacity>
+                    
                     <TouchableOpacity
                       style={[
                         styles.chip,
@@ -1693,8 +1746,7 @@ export default function AIStudioScreen() {
                         </TouchableOpacity>
                       )}
                     </TouchableOpacity>
-                  </View>
-                  <View style={[styles.chipsRow, { marginTop: 8 }]}>
+
                     <TouchableOpacity
                       style={[
                         styles.chip,
@@ -1737,58 +1789,6 @@ export default function AIStudioScreen() {
                         </TouchableOpacity>
                       )}
                     </TouchableOpacity>
-
-                    {/* ── Voice Persona Selector Chip ── */}
-                    {personas.length > 0 && (
-                      <TouchableOpacity
-                        style={[
-                          styles.chip,
-                          { marginLeft: 8 },
-                          selectedPersonaId && {
-                            backgroundColor: "rgba(130, 80, 255, 0.35)",
-                            borderColor: "#8250FF",
-                            borderWidth: 1.5,
-                            shadowColor: "#8250FF",
-                            shadowOffset: { width: 0, height: 0 },
-                            shadowOpacity: 0.9,
-                            shadowRadius: 12,
-                            elevation: 10,
-                          },
-                        ]}
-                        onPress={() => setIsPersonaModalOpen(true)}
-                      >
-                        <Ionicons
-                          name="mic-outline"
-                          size={15}
-                          color={selectedPersonaId ? "#C8A8FF" : "rgba(255,255,255,0.7)"}
-                          style={{ marginRight: 5 }}
-                        />
-                        <Text
-                          style={[
-                            styles.chipText,
-                            selectedPersonaId && { color: "#C8A8FF" },
-                          ]}
-                          numberOfLines={1}
-                        >
-                          {selectedPersonaId
-                            ? (personas.find((p: any) => p.id === selectedPersonaId)?.name ?? "Voice")
-                            : "Voice"}
-                        </Text>
-                        {selectedPersonaId && (
-                          <TouchableOpacity
-                            onPress={() => setSelectedPersonaId(null)}
-                            style={{ marginLeft: 5 }}
-                            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                          >
-                            <Ionicons
-                              name="close"
-                              size={13}
-                              color="rgba(200,168,255,0.7)"
-                            />
-                          </TouchableOpacity>
-                        )}
-                      </TouchableOpacity>
-                    )}
                   </View>
                   {isPlusMenuOpen && (
                     <View style={styles.plusMenuPopover}>
@@ -4403,6 +4403,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     flexWrap: "wrap",
+    gap: 8,
   },
   iconChip: {
     width: 36,
