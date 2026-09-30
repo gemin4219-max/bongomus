@@ -87,7 +87,16 @@ export default function UploadCoverTab({ onGenerateSuccess, openLyricsModal }: U
       setIsUploadingAudio(false);
 
       const isVoicePersona = personas.find(p => p.id === selectedPersona)?.description === "Custom Voice Clone";
-      const taskId = await uploadAndCoverAudio(coverPrompt, coverStyle, coverTitle, selectedPersona || undefined, undefined, finalAudioUrl, isVoicePersona);
+      const taskId = await uploadAndCoverAudio({
+        uploadUrl: finalAudioUrl,
+        prompt: coverPrompt,
+        style: coverStyle,
+        title: coverTitle,
+        ...(selectedPersona && {
+          personaId: selectedPersona,
+          personaModel: isVoicePersona ? 'voice_persona' : 'style_persona',
+        }),
+      });
       addTask(taskId, coverTitle);
       
       setCoverTitle('');

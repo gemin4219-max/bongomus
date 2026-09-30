@@ -9,7 +9,7 @@ import { useRouter } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
 
 import { supabase } from '../../lib/supabase';
-import { generateMusic, uploadAndCoverAudio } from '../../lib/sunoApi';
+import { generateMusic } from '../../lib/sunoApi';
 import { useAIStore } from '../../store/aiStore';
 import { useAuthStore } from '../../store/authStore';
 import { useThemeStore } from '../../store/themeStore';

@@ -393,71 +393,7 @@ export const generatePersona = async (
   return json.data?.personaId || json.personaId || (json.data && json.data.taskId) || json.taskId || json.data;
 };
 
-export const uploadAndCoverAudio = async (
-  prompt: string,
-  style: string,
-  title: string,
-  personaId: string,
-  audioId?: string,
-  audioUrl?: string,
-  isVoicePersona?: boolean
-): Promise<string> => {
-  const { provider, apiKey, baseUrl } = await getApiConfig();
-  
-  const payload: any = {
-    prompt,
-    style,
-    title,
-    customMode: true,
-    instrumental: false,
-    callBackUrl: "https://httpbin.org/post",
-    model: personaId ? 'V5_5' : 'V4_5ALL'
-  };
 
-  if (personaId) {
-    payload.personaId = personaId;
-    if (isVoicePersona) {
-      payload.personaModel = 'voice_persona';
-    }
-  }
-  
-  if (audioId) payload.audioId = audioId;
-  if (audioUrl) payload.uploadUrl = audioUrl;
-
-  const response = await fetch(`${baseUrl}/generate/upload-cover`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify(payload),
-  });
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`Failed to upload and cover audio: ${response.status} ${errorText}`);
-  }
-
-  const json = await response.json();
-  if (json.code !== 200) {
-    throw new Error(json.msg || "Failed to upload and cover audio");
-  }
-
-  let taskId;
-  if (typeof json.data === 'string') {
-    taskId = json.data;
-  } else if (json.data && json.data.taskId) {
-    taskId = json.data.taskId;
-  } else {
-    taskId = json.taskId;
-  }
-  
-  if (!taskId) {
-     console.error("Suno API upload cover full response:", json);
-     throw new Error(json.msg || "No taskId returned. Check console for full response.");
-  }
-  return taskId;
-};
 
 /**
  * generateVoiceTest
