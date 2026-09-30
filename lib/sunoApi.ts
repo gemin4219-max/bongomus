@@ -1210,3 +1210,90 @@ export const generateCoverImage = async (
 
   throw new Error('No images returned from cover art generation.');
 };
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// HIGH-LEVEL WRAPPERS  (previously lived in lib/suno.ts)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Normalised result returned by generateSunoTrack after polling completes. */
+export interface SunoTrackResult {
+  id: string;
+  audioUrl: string;
+  imageUrl: string;
+  videoUrl: string;
+  title: string;
+  lyrics?: string;
+  tags?: string;
+  genre?: string;
+  status: string;
+}
+
+/**
+ * generateSunoTrack
+ *
+ * High-level helper used by ai-studio.tsx.
+ * Submits a music generation task via generateMusic, then polls getTaskInfo
+ * until the task reaches SUCCESS (or throws after ~3 minutes).
+ */
+export const generateSunoTrack = async (params: {
+  prompt: string;
+  tags?: string;
+  title?: string;
+  make_instrumental?: boolean;
+  audioUrl?: string;
+  personaId?: string;
+}): Promise<SunoTrackResult> => {
+  const taskId = await generateMusic(
+    params.prompt,
+    params.tags ?? '',
+    params.title ?? 'Untitled',
+    params.audioUrl,
+    undefined,
+    undefined,
+    undefined,
+    params.personaId,
+    false,
+    { instrumental: params.make_instrumental ?? false },
+  );
+
+  // Poll until SUCCESS or FAILED (max ~3 min)
+  for (let i = 0; i < 60; i++) {
+    await new Promise((r) => setTimeout(r, 3000));
+    const info = await getTaskInfo(taskId);
+    if (!info) continue;
+
+    const status = (info.status || '').toUpperCase();
+
+    if (status === 'SUCCESS') {
+      const track = Array.isArray(info.data) ? info.data[0] : info.data;
+      if (!track) throw new Error('Generation succeeded but no track data was returned.');
+      return {
+        id: track.id ?? taskId,
+        audioUrl: track.audioUrl ?? '',
+        imageUrl: track.imageUrl ?? '',
+        videoUrl: track.videoUrl ?? '',
+        title: track.title ?? params.title ?? 'Untitled',
+        lyrics: track.lyrics,
+        tags: track.tags,
+        genre: track.genre,
+        status: 'SUCCESS',
+      };
+    }
+
+    if (status === 'FAILED' || status === 'SENSITIVE_WORD_ERROR') {
+      throw new Error(`Music generation failed with status: ${status}`);
+    }
+    // Still PENDING / PROCESSING — keep polling
+  }
+
+  throw new Error('Music generation timed out. Please try again.');
+};
+
+/**
+ * generateLyrics
+ *
+ * Alias for generateLyricsApi kept for backward compatibility with
+ * ai-studio.tsx which imported from the now-removed lib/suno module.
+ */
+export const generateLyrics = generateLyricsApi;

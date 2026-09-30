@@ -35,7 +35,7 @@ import { supabase } from "../../lib/supabase";
 import {
   generateSunoTrack,
   generateLyrics,
-} from "../../lib/suno";
+} from "../../lib/sunoApi";
 import {
   generateVoiceValidation,
   getVoiceValidationInfo,
@@ -44,7 +44,7 @@ import {
   generateVoiceTest,
   getTaskInfo,
 } from "../../lib/sunoApi";
-import type { SunoTrackResult } from "../../lib/suno";
+import type { SunoTrackResult } from "../../lib/sunoApi";
 import { Stack, useRouter, useLocalSearchParams } from "expo-router";
 import { Audio } from '@/mock-expo-av';
 import * as ImagePicker from "expo-image-picker";
