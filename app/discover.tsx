@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { View, Text, StyleSheet, FlatList, Dimensions, TouchableOpacity, ActivityIndicator, Animated, Easing, Share, Alert } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { Audio } from '@/mock-expo-av';
+import { Audio } from 'expo-av';
 import { supabase } from '../lib/supabase';
 import { Track } from '../constants';
 import { useThemeStore } from '../store/themeStore';

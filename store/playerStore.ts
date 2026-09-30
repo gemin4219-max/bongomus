@@ -19,7 +19,7 @@ import { supabase } from '../lib/supabase';
 import * as Haptics from 'expo-haptics';
 import * as React from 'react';
 import { Alert } from 'react-native';
-import { Audio } from '@/mock-expo-av';
+import { Audio } from 'expo-av';
 
 let backgroundBeatSound: Audio.Sound | null = null;
 

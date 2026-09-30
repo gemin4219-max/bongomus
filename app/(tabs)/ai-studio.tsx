@@ -46,7 +46,7 @@ import {
 } from "../../lib/sunoApi";
 import type { SunoTrackResult } from "../../lib/sunoApi";
 import { Stack, useRouter, useLocalSearchParams } from "expo-router";
-import { Audio } from '@/mock-expo-av';
+import { Audio } from 'expo-av';
 import * as ImagePicker from "expo-image-picker";
 import * as DocumentPicker from "expo-document-picker";
 import * as FileSystem from "expo-file-system/legacy";
