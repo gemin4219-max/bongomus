@@ -5,7 +5,7 @@ import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system/legacy';
 import { decode } from 'base64-arraybuffer';
 import { LinearGradient } from 'expo-linear-gradient';
-import { Audio } from 'expo-av';
+import { Audio } from '@/mock-expo-av';
 
 import { supabase } from '../../lib/supabase';
 import { generateVoiceValidation, getVoiceValidationInfo, createCustomVoice, getCustomVoiceRecord } from '../../lib/sunoApi';

@@ -24,7 +24,7 @@ import { useThemeStore } from "../../store/themeStore";
 import { GENRES } from "../../constants";
 import * as FileSystem from "expo-file-system/legacy";
 import { decode } from "base64-arraybuffer";
-import { Audio } from 'expo-av';
+import { Audio } from '@/mock-expo-av';
 import { LinearGradient } from "expo-linear-gradient";
 import { BlurView } from "expo-blur";
 
