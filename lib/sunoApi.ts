@@ -43,50 +43,102 @@ export interface SunoTaskResponse {
   data?: SunoAudioData[];
 }
 
+/** V6-series models (recommended). V4/V5 series kept for backward compat only. */
+export type SunoModel =
+  | 'V6' | 'V6_WILD' | 'V6_MINI'
+  | 'V5_5' | 'V5'
+  | 'V4_5PLUS' | 'V4_5ALL' | 'V4_5' | 'V4';
+
+/**
+ * generateMusic
+ * POST /api/v1/generate
+ * Generates music with or without lyrics.
+ * Supports both custom mode (full control) and non-custom mode (simple).
+ */
 export const generateMusic = async (
-  prompt: string, 
-  tags: string, 
+  prompt: string,
+  tags: string,
   title: string,
   uploadUrl?: string,
   vocalGender?: 'Male' | 'Female' | 'Any',
   weirdness?: number,
   styleInfluence?: number,
   personaId?: string,
-  isVoicePersona?: boolean
+  isVoicePersona?: boolean,
+  // New V6 parameters
+  options?: {
+    lyrics?: string;
+    imageUrls?: string[];
+    videoUrls?: string[];
+    audioUrls?: string[];
+    model?: SunoModel;
+    customMode?: boolean;
+    instrumental?: boolean;
+    negativeTags?: string;
+    variety?: 0 | 1 | 2 | 3 | 4;
+    audioWeight?: number;
+    duration?: number;
+  }
 ): Promise<string> => {
   const { provider, apiKey, baseUrl } = await getApiConfig();
 
+  const customMode = options?.customMode ?? true;
+  const instrumental = options?.instrumental ?? false;
+
+  // Build vocal-gender-appended style string
   let finalStyle = tags;
-  if (vocalGender && vocalGender !== 'Any') {
-    finalStyle = finalStyle ? `${finalStyle}, ${vocalGender.toLowerCase()} vocals` : `${vocalGender.toLowerCase()} vocals`;
+  if (customMode && vocalGender && vocalGender !== 'Any') {
+    finalStyle = finalStyle
+      ? `${finalStyle}, ${vocalGender.toLowerCase()} vocals`
+      : `${vocalGender.toLowerCase()} vocals`;
   }
 
-  const payload: any = {
-    prompt,
-    title,
-    customMode: true,
-    instrumental: false,
-    callBackUrl: "https://httpbin.org/post",
+  // Determine model — default to V6 for all new integrations
+  const model: SunoModel = options?.model ||
+    (personaId ? (isVoicePersona ? 'V6' : 'V6') : 'V6');
+
+  const payload: Record<string, any> = {
+    customMode,
+    instrumental,
+    model,
+    callBackUrl: 'https://httpbin.org/post',
+    ...(title && customMode && { title }),
+    ...(finalStyle && { style: finalStyle }),
+    ...(options?.negativeTags && customMode && { negativeTags: options.negativeTags }),
   };
 
-  if (provider === 'kie') {
-    payload.style = finalStyle;
-    payload.model = personaId ? 'V5_5' : 'V4_5ALL';
-    if (typeof weirdness === 'number') payload.weirdnessConstraint = weirdness;
-    if (typeof styleInfluence === 'number') payload.styleWeight = styleInfluence;
-  } else {
-    payload.tags = finalStyle;
-    payload.model = personaId ? (isVoicePersona ? 'V5_5' : 'V5') : 'V4_5ALL';
-    if (typeof weirdness === 'number') payload.weirdness = weirdness;
-    if (typeof styleInfluence === 'number') payload.style_influence = styleInfluence;
+  // Lyrics / prompt — lyrics takes priority in custom mode
+  if (options?.lyrics) {
+    payload.lyrics = options.lyrics;
+  }
+  if (prompt) {
+    payload.prompt = prompt;
   }
 
+  // Non-custom mode media attachments
+  if (!customMode) {
+    if (options?.imageUrls?.length) payload.imageUrls = options.imageUrls;
+    if (options?.videoUrls?.length) payload.videoUrls = options.videoUrls;
+    if (options?.audioUrls?.length) payload.audioUrls = options.audioUrls;
+  }
+
+  // Custom-mode-only controls
+  if (customMode) {
+    if (vocalGender && vocalGender !== 'Any') payload.vocalGender = vocalGender === 'Male' ? 'm' : 'f';
+    if (typeof weirdness === 'number') payload.weirdnessConstraint = weirdness;
+    if (typeof styleInfluence === 'number') payload.styleWeight = styleInfluence;
+    if (typeof options?.audioWeight === 'number') payload.audioWeight = options.audioWeight;
+    if (typeof options?.variety === 'number') payload.variety = options.variety;
+    if (typeof options?.duration === 'number') payload.duration = options.duration;
+  }
+
+  // Persona
   if (personaId) {
     payload.personaId = personaId;
-    if (isVoicePersona) {
-      payload.personaModel = 'voice_persona';
-    }
+    payload.personaModel = isVoicePersona ? 'voice_persona' : 'style_persona';
   }
+
+  // Legacy upload-cover passthrough (provider-agnostic)
   if (uploadUrl) payload.uploadUrl = uploadUrl;
 
   const response = await fetch(`${baseUrl}/generate`, {
@@ -104,22 +156,18 @@ export const generateMusic = async (
   }
 
   const json = await response.json();
-  
-  let taskId;
-  if (typeof json.data === 'string') {
-    taskId = json.data;
-  } else if (json.data && json.data.taskId) {
-    taskId = json.data.taskId;
-  } else {
-    taskId = json.taskId;
-  }
-  
+  const taskId =
+    (typeof json.data === 'string' ? json.data : null) ??
+    json.data?.taskId ??
+    json.taskId;
+
   if (!taskId) {
-     console.error("API full response:", json);
-     throw new Error(json.msg || "No taskId returned.");
+    console.error('API full response:', json);
+    throw new Error(json.msg || 'No taskId returned.');
   }
   return taskId;
 };
+
 
 export const separateVocals = async (taskId: string, audioId: string): Promise<string> => {
   const { provider, apiKey, baseUrl } = await getApiConfig();
@@ -457,7 +505,219 @@ export const generateVoiceTest = async (personaId: string, personaName: string):
 
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SUNO VOICE API – full implementation
+// MUSIC EXTENSION & UPLOAD ENDPOINTS
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Shared optional controls for Extend / Upload-Cover / Upload-Extend. */
+interface SharedGenerationControls {
+  lyrics?: string;
+  prompt?: string;
+  style?: string;
+  title?: string;
+  instrumental?: boolean;
+  vocalGender?: 'm' | 'f';
+  negativeTags?: string;
+  styleWeight?: number;         // 0–1, two decimals
+  weirdnessConstraint?: number; // 0–1, two decimals
+  audioWeight?: number;         // 0–1, two decimals
+  variety?: 0 | 1 | 2 | 3 | 4;
+  personaId?: string;
+  personaModel?: 'style_persona' | 'voice_persona';
+  callBackUrl?: string;
+}
+
+export interface ExtendMusicParams extends SharedGenerationControls {
+  /** audioId of the track to extend. Required. */
+  audioId: string;
+  /** model version. Required. Default: V6. */
+  model?: SunoModel;
+  /** taskId of the original generation task. Optional. */
+  taskId?: string;
+  /** Seconds from which to start extending (0 < continueAt < source duration). */
+  continueAt?: number;
+}
+
+export interface UploadCoverParams extends SharedGenerationControls {
+  /** Public URL of the source audio to cover. Required. Max 8 minutes. */
+  uploadUrl: string;
+  /** model version. Required. Default: V6. */
+  model?: SunoModel;
+  /** Audio duration override in seconds (10–360). V5_5/V6/V6_WILD/V6_MINI only. */
+  duration?: number;
+}
+
+export interface UploadExtendParams extends SharedGenerationControls {
+  /** Public URL of the source audio to extend. Required. Max 8 minutes. */
+  uploadUrl: string;
+  /** model version. Required. Default: V6. */
+  model?: SunoModel;
+  /** Seconds from which to start extending (0 < continueAt < source duration). */
+  continueAt?: number;
+}
+
+/**
+ * extendMusic
+ * POST /api/v1/generate/extend
+ * Extends an existing Suno track using its audioId.
+ * Always runs in custom mode. Lyrics, title, style are optional.
+ * Returns a taskId — poll with getTaskInfo.
+ */
+export const extendMusic = async (params: ExtendMusicParams): Promise<string> => {
+  const { apiKey, baseUrl } = await getApiConfig();
+
+  const body: Record<string, any> = {
+    audioId: params.audioId,
+    model: params.model ?? 'V6',
+    callBackUrl: params.callBackUrl ?? 'https://httpbin.org/post',
+    instrumental: params.instrumental ?? false,
+  };
+
+  // Optional text
+  if (params.lyrics) body.lyrics = params.lyrics;
+  if (params.prompt) body.prompt = params.prompt;
+  if (params.style) body.style = params.style;
+  if (params.title) body.title = params.title;
+  if (params.negativeTags) body.negativeTags = params.negativeTags;
+  if (params.taskId) body.taskId = params.taskId;
+  if (typeof params.continueAt === 'number') body.continueAt = params.continueAt;
+
+  // Vocal controls (only when not instrumental)
+  if (!params.instrumental) {
+    if (params.vocalGender) body.vocalGender = params.vocalGender;
+  }
+
+  // Fine-grained controls
+  if (typeof params.styleWeight === 'number') body.styleWeight = params.styleWeight;
+  if (typeof params.weirdnessConstraint === 'number') body.weirdnessConstraint = params.weirdnessConstraint;
+  if (typeof params.audioWeight === 'number') body.audioWeight = params.audioWeight;
+  if (typeof params.variety === 'number') body.variety = params.variety;
+
+  // Persona
+  if (params.personaId) {
+    body.personaId = params.personaId;
+    body.personaModel = params.personaModel ?? 'style_persona';
+  }
+
+  const response = await fetch(`${baseUrl}/generate/extend`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Failed to extend music: ${response.status} ${errorText}`);
+  }
+
+  const json = await response.json();
+  if (json.code !== 200) throw new Error(json.msg || 'Failed to extend music');
+  const taskId = json.data?.taskId || json.taskId;
+  if (!taskId) throw new Error('No taskId returned for music extension');
+  return taskId;
+};
+
+/**
+ * uploadAndCoverAudio
+ * POST /api/v1/generate/upload-cover
+ * Transforms an uploaded audio track into a new style while retaining its
+ * core melody. Provide a public uploadUrl (max 8 minutes).
+ * Returns a taskId — poll with getTaskInfo.
+ */
+export const uploadAndCoverAudio = async (params: UploadCoverParams): Promise<string> => {
+  const { apiKey, baseUrl } = await getApiConfig();
+
+  const body: Record<string, any> = {
+    uploadUrl: params.uploadUrl,
+    model: params.model ?? 'V6',
+    callBackUrl: params.callBackUrl ?? 'https://httpbin.org/post',
+    instrumental: params.instrumental ?? false,
+  };
+
+  if (params.lyrics) body.lyrics = params.lyrics;
+  if (params.prompt) body.prompt = params.prompt;
+  if (params.style) body.style = params.style;
+  if (params.title) body.title = params.title;
+  if (params.negativeTags) body.negativeTags = params.negativeTags;
+  if (params.vocalGender && !params.instrumental) body.vocalGender = params.vocalGender;
+  if (typeof params.styleWeight === 'number') body.styleWeight = params.styleWeight;
+  if (typeof params.weirdnessConstraint === 'number') body.weirdnessConstraint = params.weirdnessConstraint;
+  if (typeof params.audioWeight === 'number') body.audioWeight = params.audioWeight;
+  if (typeof params.variety === 'number') body.variety = params.variety;
+  if (typeof params.duration === 'number') body.duration = params.duration;
+  if (params.personaId) {
+    body.personaId = params.personaId;
+    body.personaModel = params.personaModel ?? 'style_persona';
+  }
+
+  const response = await fetch(`${baseUrl}/generate/upload-cover`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Failed to upload-cover audio: ${response.status} ${errorText}`);
+  }
+
+  const json = await response.json();
+  if (json.code !== 200) throw new Error(json.msg || 'Failed to upload-cover audio');
+  const taskId = json.data?.taskId || json.taskId;
+  if (!taskId) throw new Error('No taskId returned for upload-cover');
+  return taskId;
+};
+
+/**
+ * uploadAndExtendAudio
+ * POST /api/v1/generate/upload-extend
+ * Extends an uploaded audio track while preserving its original style.
+ * Provide a public uploadUrl (max 8 minutes).
+ * Returns a taskId — poll with getTaskInfo.
+ */
+export const uploadAndExtendAudio = async (params: UploadExtendParams): Promise<string> => {
+  const { apiKey, baseUrl } = await getApiConfig();
+
+  const body: Record<string, any> = {
+    uploadUrl: params.uploadUrl,
+    model: params.model ?? 'V6',
+    callBackUrl: params.callBackUrl ?? 'https://httpbin.org/post',
+    instrumental: params.instrumental ?? false,
+  };
+
+  if (params.lyrics) body.lyrics = params.lyrics;
+  if (params.prompt) body.prompt = params.prompt;
+  if (params.style) body.style = params.style;
+  if (params.title) body.title = params.title;
+  if (params.vocalGender && !params.instrumental) body.vocalGender = params.vocalGender;
+  if (typeof params.continueAt === 'number') body.continueAt = params.continueAt;
+  if (typeof params.styleWeight === 'number') body.styleWeight = params.styleWeight;
+  if (typeof params.weirdnessConstraint === 'number') body.weirdnessConstraint = params.weirdnessConstraint;
+  if (typeof params.audioWeight === 'number') body.audioWeight = params.audioWeight;
+  if (typeof params.variety === 'number') body.variety = params.variety;
+  if (params.personaId) {
+    body.personaId = params.personaId;
+    body.personaModel = params.personaModel ?? 'style_persona';
+  }
+
+  const response = await fetch(`${baseUrl}/generate/upload-extend`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Failed to upload-extend audio: ${response.status} ${errorText}`);
+  }
+
+  const json = await response.json();
+  if (json.code !== 200) throw new Error(json.msg || 'Failed to upload-extend audio');
+  const taskId = json.data?.taskId || json.taskId;
+  if (!taskId) throw new Error('No taskId returned for upload-extend');
+  return taskId;
+};
+
+
 // ─────────────────────────────────────────────────────────────────────────────
 
 /** All status values returned by the Suno Voice API endpoints. */
