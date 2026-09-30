@@ -8,7 +8,14 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { Audio } from '@/mock-expo-av';
 
 import { supabase } from '../../lib/supabase';
-import { generateVoiceValidation, getVoiceValidationInfo, createCustomVoice, getCustomVoiceRecord } from '../../lib/sunoApi';
+import {
+  generateVoiceValidation,
+  getVoiceValidationInfo,
+  createCustomVoice,
+  getCustomVoiceRecord,
+  regenerateVoiceValidation,
+  checkVoiceAvailability,
+} from '../../lib/sunoApi';
 import { useThemeStore } from '../../store/themeStore';
 
 import { useAuthStore } from '../../store/authStore';
@@ -86,29 +93,46 @@ export default function CustomVoiceWizard({ visible, onClose, onSuccess }: Custo
       interval = setInterval(async () => {
         try {
           const info = await getCustomVoiceRecord(taskId);
+          if (!info) return; // transient — keep polling
           if (info.status === 'success') {
             clearInterval(interval);
-            
-            const voiceId = info.data?.personaId || info.data?.persona_id || info.data?.id || info.data?.voiceId || info.personaId || info.persona_id || info.voiceId || info.voice_id || info.id || taskId;
-            
+
+            // voiceId comes directly from typed VoiceRecordData
+            const voiceId = info.voiceId || taskId;
+
+            // Check availability before proceeding (best practice per API docs)
+            try {
+              const available = await checkVoiceAvailability(taskId);
+              if (!available) {
+                // Voice exists but isn't ready yet — keep polling a bit longer
+                return;
+              }
+            } catch {
+              // checkVoiceAvailability failing is non-fatal — continue
+            }
+
             // Add to Zustand store
             import('../../store/aiStore').then(({ useAIStore }) => {
               useAIStore.getState().addPersona({
                 id: voiceId,
                 name: voiceName,
-                description: "Custom Voice Clone",
-                createdAt: Date.now()
+                description: 'Custom Voice Clone',
+                createdAt: Date.now(),
               });
             });
 
-            // Update Supabase
-            supabase.from('custom_voices').update({ status: 'success', voice_id: voiceId }).eq('task_id', taskId).then();
-            
+            // Persist to Supabase
+            supabase
+              .from('custom_voices')
+              .update({ status: 'success', voice_id: voiceId })
+              .eq('task_id', taskId)
+              .then();
+
             setStep(4);
             onSuccess();
-          } else if (info.status === 'fail') {
+          } else if (info.status === 'fail' || info.status === 'processing_validate_fail') {
             clearInterval(interval);
-            Alert.alert("Error", info.errorMessage || "Failed to generate custom voice");
+            Alert.alert('Error', info.errorMessage || 'Failed to generate custom voice');
             setStep(2);
           }
         } catch (e: any) {
@@ -220,26 +244,50 @@ export default function CustomVoiceWizard({ visible, onClose, onSuccess }: Custo
 
   const handleGenerateVoice = async () => {
     if (!verifyAudioUri || !taskId) {
-      Alert.alert("Missing Details", "Please record or upload the verification phrase.");
+      Alert.alert('Missing Details', 'Please record or upload the verification phrase.');
       return;
     }
     setIsProcessing(true);
     try {
       const publicUrl = await uploadToStorage(verifyAudioUri, 'verification');
-      const newTaskId = await createCustomVoice(taskId, publicUrl, voiceName, "Custom Voice", "Pop", "beginner");
+      // API order: taskId, verifyUrl, voiceName, description, style, singerSkillLevel, callBackUrl
+      const newTaskId = await createCustomVoice(
+        taskId,
+        publicUrl,
+        voiceName,
+        'Custom Voice Clone',
+        'Pop',        // style
+        'beginner',   // singerSkillLevel
+      );
       setTaskId(newTaskId);
-      
-      // Save to our db
+
+      // Persist to Supabase
       await supabase.from('custom_voices').insert({
         user_id: session?.user.id,
         name: voiceName,
         task_id: newTaskId,
-        status: 'pending'
+        status: 'pending',
       });
-      
+
       setStep(3);
     } catch (e: any) {
-      Alert.alert("Error", e.message);
+      Alert.alert('Error', e.message);
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleRegeneratePhrase = async () => {
+    if (!taskId) return;
+    setIsProcessing(true);
+    try {
+      const newTaskId = await regenerateVoiceValidation(taskId);
+      setTaskId(newTaskId);
+      setValidationPhrase(null);
+      setVerifyAudioUri(null);
+      setStep(1); // go back to polling screen while new phrase is generated
+    } catch (e: any) {
+      Alert.alert('Error', e.message);
     } finally {
       setIsProcessing(false);
     }
@@ -365,9 +413,23 @@ export default function CustomVoiceWizard({ visible, onClose, onSuccess }: Custo
                 <Text style={styles.uploadBtnText}>{verifyAudioUri ? 'Change Recording' : 'Upload Verification Recording'}</Text>
               </TouchableOpacity>
 
-              <TouchableOpacity style={[styles.primaryBtn, !verifyAudioUri && { opacity: 0.5 }]} onPress={handleGenerateVoice} disabled={isProcessing || !verifyAudioUri}>
+              <TouchableOpacity
+                style={[styles.primaryBtn, !verifyAudioUri && { opacity: 0.5 }]}
+                onPress={handleGenerateVoice}
+                disabled={isProcessing || !verifyAudioUri}
+              >
                 <LinearGradient colors={[COLORS.gold, '#F9A826']} style={[StyleSheet.absoluteFill, { borderRadius: 30 }]} />
                 {isProcessing ? <ActivityIndicator color={COLORS.black} /> : <Text style={styles.primaryBtnText}>Generate Custom Voice</Text>}
+              </TouchableOpacity>
+
+              {/* Regenerate phrase if it doesn't match / expired */}
+              <TouchableOpacity
+                style={styles.regenerateBtn}
+                onPress={handleRegeneratePhrase}
+                disabled={isProcessing}
+              >
+                <Ionicons name="refresh-outline" size={16} color={COLORS.textSecondary} />
+                <Text style={styles.regenerateBtnText}>Get a Different Phrase</Text>
               </TouchableOpacity>
             </View>
           )}
@@ -413,6 +475,8 @@ const getStyles = (COLORS: any) => StyleSheet.create({
   
   uploadBtn: { backgroundColor: 'rgba(255,255,255,0.08)', paddingHorizontal: 16, paddingVertical: 14, borderRadius: 12, flexDirection: 'row', alignItems: 'center', gap: 8, borderWidth: 1, borderColor: 'rgba(255,255,255,0.1)' },
   uploadBtnText: { color: COLORS.gold, fontWeight: '700', fontSize: 14 },
+  regenerateBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, marginTop: 16, paddingVertical: 12 },
+  regenerateBtnText: { color: COLORS.textSecondary, fontSize: 13, fontWeight: '600' },
   
   primaryBtn: { paddingVertical: 18, borderRadius: 30, alignItems: 'center', justifyContent: 'center', marginTop: 40, overflow: 'hidden' },
   primaryBtnText: { color: COLORS.black, fontSize: 16, fontWeight: '800' },

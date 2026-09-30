@@ -32,6 +32,9 @@ export interface SunoAudioData {
   streamAudioUrl?: string;
   sourceAudioUrl?: string;
   prompt?: string;
+  tags?: string;
+  genre?: string;
+  lyrics?: string;
 }
 
 export interface SunoTaskResponse {
@@ -299,25 +302,34 @@ export const getApiCreditBalance = async (): Promise<number> => {
 };
 
 export const generatePersona = async (
+  taskId: string,
   audioId: string,
   name: string,
   description: string,
-  taskId?: string
+  vocalStart?: number,
+  vocalEnd?: number,
+  style?: string
 ): Promise<string> => {
   const { provider, apiKey, baseUrl } = await getApiConfig();
   
+  const payload: any = {
+    taskId,
+    audioId,
+    name,
+    description,
+  };
+  
+  if (vocalStart !== undefined) payload.vocalStart = vocalStart;
+  if (vocalEnd !== undefined) payload.vocalEnd = vocalEnd;
+  if (style !== undefined) payload.style = style;
+
   const response = await fetch(`${baseUrl}/generate/generate-persona`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       'Authorization': `Bearer ${apiKey}`,
     },
-    body: JSON.stringify({
-      audioId,
-      name,
-      description,
-      ...(taskId && { taskId })
-    }),
+    body: JSON.stringify(payload),
   });
 
   if (!response.ok) {
@@ -399,29 +411,101 @@ export const uploadAndCoverAudio = async (
   return taskId;
 };
 
-// CUSTOM VOICE METHODS
+/**
+ * generateVoiceTest
+ *
+ * Generates a short test track using the given voice persona so the user
+ * can verify their AI voice sounds correct before using it in a real song.
+ * Returns a taskId to poll with getTaskInfo.
+ */
+export const generateVoiceTest = async (personaId: string, personaName: string): Promise<string> => {
+  const { apiKey, baseUrl } = await getApiConfig();
 
+  const payload = {
+    prompt: `[Verse]\nHabari yangu ni ya furaha\nSauti yangu ni ya nguvu\nBongo Box inaimba\nMusiki wetu unasikika\n\n[Chorus]\nSauti yangu, sauti yangu\nInaimbwa kwa furaha\nBongo Box, Bongo Box\nMusiki wa Tanzania`,
+    title: `Voice Test — ${personaName}`,
+    style: 'Bongo Flava, Afropop',
+    customMode: true,
+    instrumental: false,
+    model: 'V5_5',
+    personaId,
+    personaModel: 'voice_persona',
+    callBackUrl: 'https://httpbin.org/post',
+  };
+
+  const response = await fetch(`${baseUrl}/generate`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify(payload),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Voice test generation failed: ${response.status} ${errorText}`);
+  }
+
+  const json = await response.json();
+  if (json.code !== 200) throw new Error(json.msg || 'Failed to start voice test');
+
+  const taskId = json.data?.taskId || json.taskId || (typeof json.data === 'string' ? json.data : null);
+  if (!taskId) throw new Error('No taskId returned for voice test');
+  return taskId;
+};
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SUNO VOICE API – full implementation
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** All status values returned by the Suno Voice API endpoints. */
+export type VoiceTaskStatus =
+  | 'wait_processing'
+  | 'processing_validate'
+  | 'processing_validate_fail'
+  | 'wait_validating'
+  | 'success'
+  | 'fail';
+
+export interface VoiceValidationData {
+  taskId: string;
+  validateInfo: string;
+  status: VoiceTaskStatus;
+  errorCode: number;
+  errorMessage: string;
+}
+
+export interface VoiceRecordData {
+  taskId: string;
+  voiceId: string;
+  status: VoiceTaskStatus;
+  errorCode: number;
+  errorMessage: string;
+}
+
+/**
+ * generateVoiceValidation
+ * POST /api/v1/voice/validate
+ * Submits source audio and kicks off validation-phrase generation.
+ * Returns the taskId to poll with getVoiceValidationInfo.
+ */
 export const generateVoiceValidation = async (
   voiceUrl: string,
   vocalStartS: number,
   vocalEndS: number,
   language: string = 'en',
-  callBackUrl?: string
+  callBackUrl?: string,
 ): Promise<string> => {
-  const { provider, apiKey, baseUrl } = await getApiConfig();
+  const { apiKey, baseUrl } = await getApiConfig();
   const response = await fetch(`${baseUrl}/voice/validate`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       'Authorization': `Bearer ${apiKey}`,
     },
-    body: JSON.stringify({
-      voiceUrl,
-      vocalStartS,
-      vocalEndS,
-      language,
-      callBackUrl,
-    }),
+    body: JSON.stringify({ voiceUrl, vocalStartS, vocalEndS, language, callBackUrl }),
   });
 
   if (!response.ok) {
@@ -430,41 +514,91 @@ export const generateVoiceValidation = async (
   }
 
   const json = await response.json();
-  if (json.code !== 200) throw new Error(json.msg || "Failed");
-  
-  return json.data?.taskId || json.taskId;
+  if (json.code !== 200) throw new Error(json.msg || 'Failed to start voice validation');
+  const taskId = json.data?.taskId || json.taskId;
+  if (!taskId) throw new Error('No taskId returned for voice validation');
+  return taskId;
 };
 
-export const getVoiceValidationInfo = async (taskId: string): Promise<any> => {
-  const { provider, apiKey, baseUrl } = await getApiConfig();
-  const response = await fetch(`${baseUrl}/voice/validate-info?taskId=${taskId}`, {
-    method: 'GET',
+/**
+ * getVoiceValidationInfo
+ * GET /api/v1/voice/validate-info?taskId=
+ * Poll this until status is 'wait_validating' (phrase ready) or a failure.
+ * Returns null on transient errors so the polling loop can retry.
+ */
+export const getVoiceValidationInfo = async (taskId: string): Promise<VoiceValidationData | null> => {
+  try {
+    const { apiKey, baseUrl } = await getApiConfig();
+    const response = await fetch(`${baseUrl}/voice/validate-info?taskId=${taskId}`, {
+      method: 'GET',
+      headers: { 'Authorization': `Bearer ${apiKey}` },
+    });
+    if (!response.ok) return null; // transient — let caller retry
+    const json = await response.json();
+    if (json.code !== 200) return null; // not ready yet — let caller retry
+    return (json.data ?? null) as VoiceValidationData | null;
+  } catch {
+    return null; // network blip — let polling loop retry
+  }
+};
+
+/**
+ * regenerateVoiceValidation
+ * POST /api/v1/voice/regenerate
+ * Regenerate the validation phrase for an existing Suno Voice task.
+ * Use when the previous phrase failed, expired, or the user needs a new one.
+ * Returns a new taskId — poll with getVoiceValidationInfo.
+ *
+ * NOTE: The Suno API schema uses the field name `calBackUrl` (single-l) for
+ * this endpoint — different from the double-l `callBackUrl` used elsewhere.
+ */
+export const regenerateVoiceValidation = async (
+  taskId: string,
+  calBackUrl?: string,
+): Promise<string> => {
+  const { apiKey, baseUrl } = await getApiConfig();
+  const body: Record<string, string> = { taskId };
+  if (calBackUrl) body.calBackUrl = calBackUrl; // intentional single-l per API spec
+
+  const response = await fetch(`${baseUrl}/voice/regenerate`, {
+    method: 'POST',
     headers: {
+      'Content-Type': 'application/json',
       'Authorization': `Bearer ${apiKey}`,
     },
+    body: JSON.stringify(body),
   });
 
   if (!response.ok) {
     const errorText = await response.text();
-    throw new Error(`Failed to get validation info: ${response.status} ${errorText}`);
+    throw new Error(`Failed to regenerate validation phrase: ${response.status} ${errorText}`);
   }
 
   const json = await response.json();
-  if (json.code !== 200) throw new Error(json.msg || "Failed");
-  
-  return json.data;
+  if (json.code !== 200) throw new Error(json.msg || 'Failed to regenerate validation phrase');
+  const newTaskId = json.data?.taskId || json.taskId;
+  if (!newTaskId) throw new Error('No taskId returned for phrase regeneration');
+  return newTaskId;
 };
 
+/**
+ * createCustomVoice
+ * POST /api/v1/voice/generate
+ * Submit the user's verification audio to create the final custom voice.
+ * The verifyUrl MUST be the user recording the exact validateInfo phrase —
+ * singing is recommended for best results.
+ * Returns a taskId — poll with getCustomVoiceRecord.
+ */
 export const createCustomVoice = async (
   taskId: string,
   verifyUrl: string,
   voiceName?: string,
   description?: string,
   style?: string,
-  singerSkillLevel: string = 'beginner',
-  callBackUrl?: string
+  singerSkillLevel: 'beginner' | 'intermediate' | 'advanced' | 'professional' = 'beginner',
+  callBackUrl?: string,
 ): Promise<string> => {
-  const { provider, apiKey, baseUrl } = await getApiConfig();
+  const { apiKey, baseUrl } = await getApiConfig();
   const response = await fetch(`${baseUrl}/voice/generate`, {
     method: 'POST',
     headers: {
@@ -474,11 +608,11 @@ export const createCustomVoice = async (
     body: JSON.stringify({
       taskId,
       verifyUrl,
-      voiceName,
-      description,
-      style,
+      ...(voiceName && { voiceName }),
+      ...(description && { description }),
+      ...(style && { style }),
       singerSkillLevel,
-      callBackUrl,
+      ...(callBackUrl && { callBackUrl }),
     }),
   });
 
@@ -488,30 +622,65 @@ export const createCustomVoice = async (
   }
 
   const json = await response.json();
-  if (json.code !== 200) throw new Error(json.msg || "Failed");
-  
-  return json.data?.taskId || json.taskId;
+  if (json.code !== 200) throw new Error(json.msg || 'Failed to create custom voice');
+  const newTaskId = json.data?.taskId || json.taskId;
+  if (!newTaskId) throw new Error('No taskId returned for custom voice creation');
+  return newTaskId;
 };
 
-export const getCustomVoiceRecord = async (taskId: string): Promise<any> => {
-  const { provider, apiKey, baseUrl } = await getApiConfig();
-  const response = await fetch(`${baseUrl}/voice/record-info?taskId=${taskId}`, {
-    method: 'GET',
+/**
+ * getCustomVoiceRecord
+ * GET /api/v1/voice/record-info?taskId=
+ * Poll this until status is 'success' (voiceId ready) or a failure.
+ * Returns null on transient errors so the polling loop can retry.
+ */
+export const getCustomVoiceRecord = async (taskId: string): Promise<VoiceRecordData | null> => {
+  try {
+    const { apiKey, baseUrl } = await getApiConfig();
+    const response = await fetch(`${baseUrl}/voice/record-info?taskId=${taskId}`, {
+      method: 'GET',
+      headers: { 'Authorization': `Bearer ${apiKey}` },
+    });
+    if (!response.ok) return null; // transient — let caller retry
+    const json = await response.json();
+    if (json.code !== 200) return null; // not ready yet — let caller retry
+    return (json.data ?? null) as VoiceRecordData | null;
+  } catch {
+    return null; // network blip — let polling loop retry
+  }
+};
+
+/**
+ * checkVoiceAvailability
+ * POST /api/v1/voice/check-voice
+ * Confirm whether a generated custom voice is ready for use in generation APIs.
+ * Call this after getCustomVoiceRecord returns status === 'success' before
+ * starting any downstream music generation tasks that depend on the voice.
+ * Returns true if the voice is available, false otherwise.
+ */
+export const checkVoiceAvailability = async (taskId: string): Promise<boolean> => {
+  const { apiKey, baseUrl } = await getApiConfig();
+
+  const response = await fetch(`${baseUrl}/voice/check-voice`, {
+    method: 'POST',
     headers: {
+      'Content-Type': 'application/json',
       'Authorization': `Bearer ${apiKey}`,
     },
+    body: JSON.stringify({ task_id: taskId }), // NOTE: snake_case per API spec
   });
 
   if (!response.ok) {
     const errorText = await response.text();
-    throw new Error(`Failed to get custom voice record: ${response.status} ${errorText}`);
+    throw new Error(`Failed to check voice availability: ${response.status} ${errorText}`);
   }
 
   const json = await response.json();
-  if (json.code !== 200) throw new Error(json.msg || "Failed");
-  
-  return json.data;
+  if (json.code !== 200) throw new Error(json.msg || 'Failed to check voice availability');
+  return json.data?.isAvailable === true;
 };
+
+
 
 // SOUNDS
 export const generateSounds = async (
@@ -646,4 +815,138 @@ export const extendAudio = async (
   const taskId = json.data?.taskId || json.taskId || (typeof json.data === 'string' ? json.data : undefined);
   if (!taskId) throw new Error("No taskId returned for extend audio");
   return taskId;
+};
+
+/**
+ * generateLyricsApi
+ *
+ * Calls kie.ai /generate/lyrics endpoint (async — submit then poll).
+ * Returns the completed lyrics data object with a `text` field.
+ */
+export const generateLyricsApi = async (prompt: string): Promise<any> => {
+  const { apiKey, baseUrl } = await getApiConfig();
+
+  // Step 1: Submit the lyrics generation request
+  const submitRes = await fetch(`${baseUrl}/generate/lyrics`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({ prompt }),
+  });
+
+  if (!submitRes.ok) {
+    const errorText = await submitRes.text();
+    throw new Error(`Lyrics generation error: ${submitRes.status} ${errorText}`);
+  }
+
+  const submitJson = await submitRes.json();
+  if (submitJson.code !== 200) throw new Error(submitJson.msg || 'Failed to start lyrics generation');
+
+  // Extract taskId from response
+  const taskId =
+    submitJson.data?.taskId ||
+    submitJson.taskId ||
+    (typeof submitJson.data === 'string' ? submitJson.data : null);
+
+  // If the API returned lyrics directly (no taskId), return immediately
+  if (!taskId) {
+    const directText =
+      submitJson.data?.text ||
+      submitJson.data?.lyrics ||
+      submitJson.text ||
+      submitJson.lyrics;
+    if (directText) return { text: directText };
+    throw new Error('No taskId returned from lyrics generation');
+  }
+
+  // Step 2: Poll GET /generate/lyrics?taskId= until SUCCESS
+  for (let i = 0; i < 30; i++) {
+    await new Promise((r) => setTimeout(r, 3000));
+
+    const pollRes = await fetch(`${baseUrl}/generate/lyrics?taskId=${taskId}`, {
+      method: 'GET',
+      headers: { 'Authorization': `Bearer ${apiKey}` },
+    });
+
+    if (!pollRes.ok) continue; // transient error, keep polling
+
+    const pollJson = await pollRes.json();
+    if (pollJson.code !== 200) continue;
+
+    const data = pollJson.data;
+    const status = (data?.status || data?.successFlag || '').toUpperCase();
+
+    if (status === 'SUCCESS' || status === 'COMPLETE') {
+      // Return normalised shape that suno.ts generateLyrics can read
+      return {
+        text: data?.text || data?.lyrics || data?.response?.text || '',
+        title: data?.title || '',
+        tags: data?.tags || data?.style || '',
+      };
+    }
+
+    if (status === 'FAILED' || status === 'ERROR') {
+      throw new Error(data?.failReason || 'Lyrics generation failed on the server.');
+    }
+    // Still PROCESSING — keep polling
+  }
+
+  throw new Error('Lyrics generation timed out. Please try again.');
+};
+
+
+/**
+ * generateCoverImage
+ *
+ * Generates AI cover art images via kie.ai /generate/image.
+ * Returns an array of image URLs (usually 2).
+ */
+export const generateCoverImage = async (
+  prompt: string,
+  count: number = 2,
+): Promise<string[]> => {
+  const { apiKey, baseUrl } = await getApiConfig();
+
+  const response = await fetch(`${baseUrl}/generate/image`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      prompt,
+      count,
+      // Square format — ideal for album art
+      width: 1024,
+      height: 1024,
+    }),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Cover image generation failed: ${response.status} ${errorText}`);
+  }
+
+  const json = await response.json();
+  if (json.code !== 200) throw new Error(json.msg || 'Failed to generate cover image');
+
+  // kie.ai can return images in several shapes — normalise all of them
+  const data = json.data;
+  if (Array.isArray(data)) {
+    // Array of strings or objects with url/imageUrl
+    return data.map((item: any) =>
+      typeof item === 'string' ? item : (item.url || item.imageUrl || item.image_url || '')
+    ).filter(Boolean);
+  }
+  if (data?.images && Array.isArray(data.images)) {
+    return data.images.map((item: any) =>
+      typeof item === 'string' ? item : (item.url || item.imageUrl || '')
+    ).filter(Boolean);
+  }
+  if (data?.url) return [data.url];
+  if (data?.imageUrl) return [data.imageUrl];
+
+  throw new Error('No images returned from cover art generation.');
 };
