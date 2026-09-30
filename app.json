@@ -51,7 +51,6 @@
     },
     "plugins": [
       "expo-router",
-      "expo-av",
       "expo-font",
       "expo-document-picker",
       [
