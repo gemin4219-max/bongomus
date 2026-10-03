@@ -2,6 +2,20 @@ import { useEffect } from 'react';
 import { LogBox, Alert } from 'react-native';
 import * as SplashScreen from 'expo-splash-screen';
 import * as ScreenCapture from 'expo-screen-capture';
+import * as Sentry from '@sentry/react-native';
+
+// Crash reporting: catches JS errors and native iOS/Android crashes.
+// Native crashes are sent on the next app launch.
+try {
+  Sentry.init({
+    dsn: 'https://c552ff30635ec7a2ab7a9e794f0f8bba@o4512188043493376.ingest.de.sentry.io/4512188048212048',
+    debug: false,
+    enableNative: true,
+    enableNativeCrashHandling: true,
+    attachStacktrace: true,
+    tracesSampleRate: 0.2,
+  });
+} catch (e) {}
 
 // Keep the native splash screen visible until we are ready — this PREVENTS the white flash
 try {
@@ -43,13 +57,6 @@ const customTheme = {
   },
 };
 
-// --- TEMPORARILY DISABLED FOR EXPO GO ---
-// import * as Sentry from '@sentry/react-native';
-// Sentry.init({
-//   dsn: 'https://c552ff30635ec7a2ab7a9e794f0f8bba@o4512188043493376.ingest.de.sentry.io/4512188048212048',
-//   debug: false, 
-// });
-// ---------------------------------------
 
 function RootLayout() {
   const { init, session, isLoading, isOfflineMode } = useAuthStore();
@@ -141,8 +148,7 @@ function RootLayout() {
   );
 }
 
-export default RootLayout;
-// export default Sentry.wrap(RootLayout);
+export default Sentry.wrap(RootLayout);
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: '#0A0A0F' },
