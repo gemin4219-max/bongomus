@@ -22,7 +22,12 @@
       "infoPlist": {
         "UIBackgroundModes": [
           "audio"
-        ]
+        ],
+        "NSMicrophoneUsageDescription": "Bongo Stream uses the microphone to record your vocals and voice samples.",
+        "NSCameraUsageDescription": "Bongo Stream uses the camera to scan lyrics and take cover photos.",
+        "NSPhotoLibraryUsageDescription": "Bongo Stream needs access to your photos to set cover art and profile pictures.",
+        "NSPhotoLibraryAddUsageDescription": "Bongo Stream saves share cards and cover art to your photos.",
+        "ITSAppUsesNonExemptEncryption": false
       }
     },
     "android": {
