@@ -59,6 +59,13 @@
       "expo-font",
       "expo-document-picker",
       [
+        "expo-audio",
+        {
+          "microphonePermission": "Bongo Stream uses the microphone to record your vocals and voice samples.",
+          "enableBackgroundPlayback": true
+        }
+      ],
+      [
         "react-native-google-mobile-ads",
         {
           "androidAppId": "ca-app-pub-3940256099942544~3347511713",

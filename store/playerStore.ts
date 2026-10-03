@@ -23,11 +23,34 @@ const emitTP = (event: string, payload: any) => {
 let mainStatusSub: { remove: () => void } | null = null;
 let sawPlaying = false;
 
+/** Only real http(s)/file URLs can be shown as lock-screen artwork. */
+const toArtworkUrl = (a: any): string | undefined =>
+  typeof a === 'string' && /^(https?|file):/.test(a) && !a.includes('via.placeholder') ? a : undefined;
+
+/** Show title/artist/artwork + play/pause/scrub/±10s on the lock screen, Control Center and notification. */
+const activateLockScreen = (player: AudioPlayer, t: any) => {
+  try {
+    player.setActiveForLockScreen(
+      true,
+      {
+        title: t?.title || 'Bongo Stream',
+        artist: t?.artist || 'Unknown Artist',
+        albumTitle: 'Bongo Stream',
+        artworkUrl: toArtworkUrl(t?.artwork),
+      },
+      { showSeekForward: true, showSeekBackward: true }
+    );
+  } catch (e) {
+    console.warn('[player] lock screen controls failed', e);
+  }
+};
+
 const releaseMainPlayer = () => {
   try { mainStatusSub?.remove(); } catch {}
   mainStatusSub = null;
   if (mainPlayer) {
     try { mainPlayer.pause(); } catch {}
+    try { mainPlayer.setActiveForLockScreen(false); } catch {}
     try { mainPlayer.remove(); } catch {}
   }
   mainPlayer = null;
@@ -76,6 +99,7 @@ const TrackPlayer: any = {
       try {
         mainPlayer = createAudioPlayer(tracks[0].url);
         attachStatusListener(mainPlayer);
+        activateLockScreen(mainPlayer, tracks[0]);
       } catch (e) {
         console.error("Failed to create audio player:", e);
       }
@@ -145,7 +169,7 @@ import { supabase } from '../lib/supabase';
 import * as Haptics from 'expo-haptics';
 import * as React from 'react';
 import { Alert } from 'react-native';
-import { createAudioPlayer, AudioPlayer } from 'expo-audio';
+import { createAudioPlayer, AudioPlayer, setAudioModeAsync } from 'expo-audio';
 
 let backgroundBeatPlayer: AudioPlayer | null = null;
 
@@ -206,6 +230,7 @@ let _currentPlaybackState: State = State.None;
 function notifyPlaybackState(state: State) {
   _currentPlaybackState = state;
   _playbackListeners.forEach(fn => fn({ state }));
+  try { usePlayerStore.setState({ isPlaying: state === State.Playing }); } catch {}
 }
 
 export function usePlaybackState(): PlaybackStateHook {
@@ -232,11 +257,15 @@ type PlayerStore = {
   isPlayerReady: boolean;
   mode: PlayerMode;
   liveStationId: string | null;
+  isPlaying: boolean;
+  positionMs: number;
+  durationMs: number;
 
   initPlayer: () => Promise<void>;
   playTrack: (track: Track, queue?: Track[]) => Promise<void>;
   togglePlayPause: () => Promise<void>;
   pause: () => Promise<void>;
+  pausePlayer: () => Promise<void>;
   closePlayer: () => Promise<void>;
   skipNext: () => Promise<void>;
   skipPrev: () => Promise<void>;
@@ -280,13 +309,25 @@ export const usePlayerStore = create<PlayerStore>()(
   isPlayerReady: false,
   mode: 'local',
   liveStationId: null,
+  isPlaying: false,
+  positionMs: 0,
+  durationMs: 0,
 
   initPlayer: async () => {
     if (get().isPlayerReady) return;
     try {
       try {
-        // Audio mode settings are managed via expo-audio config plugin in app.json
-      } catch (e) {}
+        // Keep playing when the app is in the background / screen is locked,
+        // ignore the silent switch, and own the lock-screen controls (requires doNotMix).
+        await setAudioModeAsync({
+          playsInSilentMode: true,
+          shouldPlayInBackground: true,
+          interruptionMode: 'doNotMix',
+          allowsRecording: false,
+        });
+      } catch (e) {
+        console.warn('[player] setAudioModeAsync failed', e);
+      }
 
       await TrackPlayer.setupPlayer({
         iosCategory: IOSCategory.Playback,
@@ -419,7 +460,7 @@ export const usePlayerStore = create<PlayerStore>()(
 
       if (backgroundBeatPlayer) {
         backgroundBeatPlayer.pause();
-        backgroundBeatPlayer.release();
+        backgroundBeatPlayer.remove();
         backgroundBeatPlayer = null;
       }
 
@@ -471,6 +512,10 @@ export const usePlayerStore = create<PlayerStore>()(
       await TrackPlayer.pause();
       if (backgroundBeatPlayer) backgroundBeatPlayer.pause();
     }
+  },
+
+  pausePlayer: async () => {
+    await get().pause();
   },
 
   skipNext: async () => {
@@ -660,6 +705,10 @@ if (!_playerListenersRegistered) {
     _playerListenersRegistered = true;
     TrackPlayer.addEventListener(Event.PlaybackProgressUpdated, async (event) => {
       const store = usePlayerStore.getState();
+      usePlayerStore.setState({
+        positionMs: Math.max(0, (event.position || 0) * 1000),
+        durationMs: isFinite(event.duration) ? Math.max(0, (event.duration || 0) * 1000) : 0,
+      });
       if (event.position > 30 && !store.hasCountedPlay) {
         store.markPlayCounted();
       }

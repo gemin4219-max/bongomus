@@ -622,7 +622,7 @@ export default function AIStudioScreen() {
         setIsWizardPreviewPlaying(false);
         await new Promise((r) => setTimeout(r, 350));
       }
-      await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
+      await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true, shouldPlayInBackground: true, interruptionMode: 'doNotMix' });
       // REQUIRED by expo-audio: without this, iOS never creates the recording file.
       // Pass the preset explicitly so a fresh AAC/m4a recorder is always created.
       await wizardRecorder.prepareToRecordAsync(RecordingPresets.HIGH_QUALITY);
@@ -662,7 +662,7 @@ export default function AIStudioScreen() {
         }
       }
       // Switch the iOS audio session to playback so sound goes to the loudspeaker
-      await setAudioModeAsync({ allowsRecording: false, playsInSilentMode: true });
+      await setAudioModeAsync({ allowsRecording: false, playsInSilentMode: true, shouldPlayInBackground: true, interruptionMode: 'doNotMix' });
       if (wizardLoadedUriRef.current !== uriToPlay) {
         wizardPlayer.replace({ uri: uriToPlay });
         wizardLoadedUriRef.current = uriToPlay;
@@ -719,7 +719,7 @@ export default function AIStudioScreen() {
       }
       const rawUri = wizardRecorder.uri;
       // Back to playback mode so the preview plays through the speaker
-      try { await setAudioModeAsync({ allowsRecording: false, playsInSilentMode: true }); } catch {}
+      try { await setAudioModeAsync({ allowsRecording: false, playsInSilentMode: true, shouldPlayInBackground: true, interruptionMode: 'doNotMix' }); } catch {}
 
       if (!save) return;
       // The voice-clone API rejects samples shorter than ~10 seconds
@@ -1817,7 +1817,7 @@ export default function AIStudioScreen() {
       if (permissionResponse.status !== 'granted') {
          return;
       }
-      await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
+      await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true, shouldPlayInBackground: true, interruptionMode: 'doNotMix' });
 
       mainRecorder.record();
       setIsRecording(true);
@@ -1848,7 +1848,7 @@ export default function AIStudioScreen() {
     try {
       if (mainRecorder.isRecording) {
         await mainRecorder.stop();
-        await setAudioModeAsync({ allowsRecording: false, playsInSilentMode: true });
+        await setAudioModeAsync({ allowsRecording: false, playsInSilentMode: true, shouldPlayInBackground: true, interruptionMode: 'doNotMix' });
       }
       const uri = mainRecorder.uri;
       setIsRecording(false);
