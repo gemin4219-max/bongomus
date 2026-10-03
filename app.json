@@ -3,7 +3,7 @@
     "name": "Bongo Stream",
     "slug": "combongostreamapp",
     "backgroundColor": "#0A0A0F",
-    "version": "1.0.2",
+    "version": "1.0.3",
     "scheme": "bongo-stream",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -37,7 +37,7 @@
         "backgroundColor": "#0A0A0F"
       },
       "package": "com.bongostream.app",
-      "versionCode": 3,
+      "versionCode": 4,
       "permissions": [
         "READ_EXTERNAL_STORAGE",
         "WRITE_EXTERNAL_STORAGE",
@@ -65,14 +65,17 @@
           "enableBackgroundPlayback": true
         }
       ],
+      "expo-asset",
       [
-        "react-native-google-mobile-ads",
+        "expo-build-properties",
         {
-          "androidAppId": "ca-app-pub-3940256099942544~3347511713",
-          "iosAppId": "ca-app-pub-3940256099942544~1458002511"
+          "android": {
+            "enableMinifyInReleaseBuilds": true,
+            "enableShrinkResourcesInReleaseBuilds": true,
+            "extraProguardRules": "-keep class com.swmansion.reanimated.** { *; }\n-keep class com.facebook.react.turbomodule.** { *; }\n-keep class expo.modules.** { *; }\n-keep class io.sentry.** { *; }\n-dontwarn io.sentry.**"
+          }
         }
       ],
-      "expo-asset",
       "@sentry/react-native/expo",
       "@sentry/react-native"
     ],
