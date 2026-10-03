@@ -35,12 +35,19 @@ export interface SunoAudioData {
   tags?: string;
   genre?: string;
   lyrics?: string;
+  is_public?: boolean;
+  description?: string;
+  caption?: string;
+  /** Suno generation taskId that produced this track (used when extending it). */
+  taskId?: string;
 }
 
 export interface SunoTaskResponse {
   taskId: string;
   status: SunoTaskStatus;
   data?: SunoAudioData[];
+  /** Suno's human-readable reason when a task fails. */
+  errorMessage?: string;
 }
 
 /** V6-series models (recommended). V4/V5 series kept for backward compat only. */
@@ -93,9 +100,8 @@ export const generateMusic = async (
       : `${vocalGender.toLowerCase()} vocals`;
   }
 
-  // Determine model — default to V6 for all new integrations
-  const model: SunoModel = options?.model ||
-    (personaId ? (isVoicePersona ? 'V6' : 'V6') : 'V6');
+  // V6 for everything — V5/V5_5 are discontinued on KIE (personas work on V6).
+  const model: SunoModel = options?.model || 'V6';
 
   const payload: Record<string, any> = {
     customMode,
@@ -156,13 +162,17 @@ export const generateMusic = async (
   }
 
   const json = await response.json();
+  // KIE returns HTTP 200 with an error code in the body (e.g. code 422 "Invalid personaId")
+  if (typeof json.code === 'number' && json.code !== 200) {
+    throw new Error(json.msg || `Generation rejected (code ${json.code})`);
+  }
   const taskId =
     (typeof json.data === 'string' ? json.data : null) ??
     json.data?.taskId ??
     json.taskId;
 
   if (!taskId) {
-    console.error('API full response:', json);
+    console.warn('API full response:', json);
     throw new Error(json.msg || 'No taskId returned.');
   }
   return taskId;
@@ -260,6 +270,7 @@ export const getTaskInfo = async (taskId: string): Promise<SunoTaskResponse> => 
     taskId: taskData.taskId || taskId,
     status,
     data: mappedData,
+    errorMessage: taskData.errorMessage || undefined,
   };
 };
 
@@ -301,7 +312,7 @@ export const getVocalRemovalInfo = async (taskId: string): Promise<SunoTaskRespo
         imageUrl: 'https://via.placeholder.com/150/8A2BE2/FFFFFF?text=Vocals',
         audioUrl: taskData.response.vocalUrl,
         videoUrl: ''
-      });
+      } as SunoAudioData);
     }
     if (taskData.response.instrumentalUrl) {
       mappedData.push({
@@ -310,7 +321,7 @@ export const getVocalRemovalInfo = async (taskId: string): Promise<SunoTaskRespo
         imageUrl: 'https://via.placeholder.com/150/4169E1/FFFFFF?text=Instrumental',
         audioUrl: taskData.response.instrumentalUrl,
         videoUrl: ''
-      });
+      } as SunoAudioData);
     }
     if (mappedData.length === 0) {
       mappedData = taskData.response.sunoData || [];
@@ -329,7 +340,9 @@ export const getVocalRemovalInfo = async (taskId: string): Promise<SunoTaskRespo
 export const getApiCreditBalance = async (): Promise<number> => {
   const { provider, apiKey, baseUrl } = await getApiConfig();
   
-  const response = await fetch(`${baseUrl}/generate/credit`, {
+  // KIE exposes the account balance at /chat/credit (/generate/credit is Suno-only → 404 on KIE)
+  const endpoint = provider === 'kie' ? `${baseUrl}/chat/credit` : `${baseUrl}/generate/credit`;
+  const response = await fetch(endpoint, {
     method: 'GET',
     headers: {
       'Authorization': `Bearer ${apiKey}`,
@@ -390,7 +403,10 @@ export const generatePersona = async (
     throw new Error(json.msg || "Failed to generate persona");
   }
   
-  return json.data?.personaId || json.personaId || (json.data && json.data.taskId) || json.taskId || json.data;
+  // Only accept a real persona id — a taskId saved here would later fail with "Invalid personaId".
+  const personaId = json.data?.personaId || json.personaId || (typeof json.data === 'string' ? json.data : null);
+  if (!personaId) throw new Error(json.msg || 'No persona ID returned. Please try again.');
+  return personaId;
 };
 
 
@@ -411,7 +427,7 @@ export const generateVoiceTest = async (personaId: string, personaName: string):
     style: 'Bongo Flava, Afropop',
     customMode: true,
     instrumental: false,
-    model: 'V5_5',
+    model: 'V6',
     personaId,
     personaModel: 'voice_persona',
     callBackUrl: 'https://httpbin.org/post',
@@ -972,45 +988,51 @@ export const getVideoRecordInfo = async (taskId: string): Promise<any> => {
 };
 
 // EXTEND AUDIO
+/**
+ * extendAudio — convenience wrapper around extendMusic (POST /generate/extend).
+ *
+ * Fixes vs. the old implementation:
+ *  - model must match the source track (we generate with V6), not V4_5ALL
+ *  - callBackUrl is REQUIRED by the API
+ *  - the field is `continueAt` (camelCase); it must be > 0 and < source duration
+ *  - instrumental is sent explicitly instead of just blanking the lyrics
+ */
 export const extendAudio = async (
   audioId: string,
-  prompt: string,
-  continueAt?: string | number
+  lyrics: string,
+  continueAt?: string | number,
+  options?: {
+    instrumental?: boolean;
+    taskId?: string;
+    model?: SunoModel;
+    style?: string;
+    title?: string;
+    sourceDuration?: number;
+    personaId?: string;
+    personaModel?: 'style_persona' | 'voice_persona';
+  },
 ): Promise<string> => {
-  const { provider, apiKey, baseUrl } = await getApiConfig();
-  
-  const payload: any = {
+  let at: number | undefined =
+    continueAt === undefined || continueAt === '' ? undefined : Number(continueAt);
+  if (at !== undefined && (!Number.isFinite(at) || at <= 0)) at = undefined;
+  const dur = options?.sourceDuration;
+  if (at !== undefined && dur && dur > 1 && at >= dur) at = Math.floor(dur - 1);
+
+  const instrumental = options?.instrumental ?? false;
+
+  return extendMusic({
     audioId,
-    prompt,
-    customMode: true,
-    model: "V4_5ALL"
-  };
-  if (continueAt !== undefined && continueAt !== '') {
-    payload.continue_at = continueAt;
-  }
-
-  const response = await fetch(`${baseUrl}/generate/extend`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify(payload),
+    model: options?.model ?? 'V6',
+    instrumental,
+    ...(lyrics && !instrumental ? { lyrics } : {}),
+    ...(options?.taskId ? { taskId: options.taskId } : {}),
+    ...(options?.style ? { style: options.style } : {}),
+    ...(options?.title ? { title: options.title.slice(0, 100) } : {}),
+    ...(at !== undefined ? { continueAt: Math.floor(at) } : {}),
+    ...(options?.personaId
+      ? { personaId: options.personaId, personaModel: options.personaModel ?? 'voice_persona' }
+      : {}),
   });
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`Failed to extend audio: ${response.status} ${errorText}`);
-  }
-
-  const json = await response.json();
-  if (json.code !== 200) {
-    throw new Error(json.msg || "Failed to extend audio");
-  }
-
-  const taskId = json.data?.taskId || json.taskId || (typeof json.data === 'string' ? json.data : undefined);
-  if (!taskId) throw new Error("No taskId returned for extend audio");
-  return taskId;
 };
 
 /**
@@ -1096,55 +1118,85 @@ export const generateLyricsApi = async (prompt: string): Promise<any> => {
 /**
  * generateCoverImage
  *
- * Generates AI cover art images via kie.ai /generate/image.
- * Returns an array of image URLs (usually 2).
+ * Prompt-based AI cover art. Suno/kie have no prompt-driven image endpoint
+ * (the old `/generate/image` call 404'd), so we use Pollinations (Flux),
+ * which renders a square image directly from a URL.
+ *
+ * The free tier allows ~1 image per 15 s per device (it answers 402/429 when
+ * hit faster), so images are generated one at a time with automatic retry.
+ * Each image is downloaded to a local cache file; `onImage` fires as soon as
+ * each one is ready so the UI can show it immediately.
  */
+export interface CoverImage {
+  /** Local file:// uri (fast to display, used for uploading on save). */
+  uri: string;
+  /** Original remote URL (fallback if uploading fails). */
+  remoteUrl: string;
+}
+
+const COVER_TIMEOUT_MS = 90_000;
+const COVER_RATE_WAIT_MS = 16_000;
+const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
+let lastCoverRequestAt = 0;
+
+const downloadCover = async (remoteUrl: string): Promise<CoverImage> => {
+  const FileSystem = require('expo-file-system/legacy');
+  const target = `${FileSystem.cacheDirectory}cover_${Date.now()}_${Math.floor(Math.random() * 1e6)}.jpg`;
+
+  for (let attempt = 0; attempt < 4; attempt++) {
+    // Respect the free-tier spacing between requests.
+    const since = Date.now() - lastCoverRequestAt;
+    if (lastCoverRequestAt && since < COVER_RATE_WAIT_MS) await sleep(COVER_RATE_WAIT_MS - since);
+    lastCoverRequestAt = Date.now();
+
+    const result: any = await Promise.race([
+      FileSystem.downloadAsync(remoteUrl, target),
+      sleep(COVER_TIMEOUT_MS).then(() => { throw new Error('The image server took too long to respond.'); }),
+    ]);
+
+    const type = String(result?.headers?.['Content-Type'] || result?.headers?.['content-type'] || '');
+    if (result?.status === 200 && (!type || type.startsWith('image/'))) {
+      return { uri: result.uri, remoteUrl };
+    }
+    if (result?.status === 402 || result?.status === 429 || result?.status >= 500) {
+      continue; // rate-limited / busy → wait and retry
+    }
+    throw new Error(`Image server returned ${result?.status}.`);
+  }
+  throw new Error('The image server is busy right now.');
+};
+
 export const generateCoverImage = async (
   prompt: string,
   count: number = 2,
-): Promise<string[]> => {
-  const { apiKey, baseUrl } = await getApiConfig();
+  onImage?: (image: CoverImage, index: number) => void,
+): Promise<CoverImage[]> => {
+  const cleanPrompt = prompt.replace(/\s+/g, ' ').trim().slice(0, 400);
+  if (!cleanPrompt) throw new Error('Please describe the cover you want.');
 
-  const response = await fetch(`${baseUrl}/generate/image`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      prompt,
-      count,
-      // Square format — ideal for album art
-      width: 1024,
-      height: 1024,
-    }),
-  });
+  const fullPrompt = `${cleanPrompt}, square album cover artwork, highly detailed, no text, no watermark`;
+  const encoded = encodeURIComponent(fullPrompt);
 
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`Cover image generation failed: ${response.status} ${errorText}`);
+  const images: CoverImage[] = [];
+  let lastError: any = null;
+
+  for (let i = 0; i < count; i++) {
+    const seed = Math.floor(Math.random() * 1_000_000_000);
+    const url = `https://image.pollinations.ai/prompt/${encoded}?width=1024&height=1024&seed=${seed}&model=flux&nologo=true`;
+    try {
+      const img = await downloadCover(url);
+      images.push(img);
+      onImage?.(img, images.length - 1);
+    } catch (e) {
+      lastError = e;
+      if (images.length > 0) break; // keep what we already have
+    }
   }
 
-  const json = await response.json();
-  if (json.code !== 200) throw new Error(json.msg || 'Failed to generate cover image');
-
-  // kie.ai can return images in several shapes — normalise all of them
-  const data = json.data;
-  if (Array.isArray(data)) {
-    // Array of strings or objects with url/imageUrl
-    return data.map((item: any) =>
-      typeof item === 'string' ? item : (item.url || item.imageUrl || item.image_url || '')
-    ).filter(Boolean);
+  if (images.length === 0) {
+    throw new Error(`Could not generate cover art. ${lastError?.message || 'Unknown error.'} Please try again.`);
   }
-  if (data?.images && Array.isArray(data.images)) {
-    return data.images.map((item: any) =>
-      typeof item === 'string' ? item : (item.url || item.imageUrl || '')
-    ).filter(Boolean);
-  }
-  if (data?.url) return [data.url];
-  if (data?.imageUrl) return [data.imageUrl];
-
-  throw new Error('No images returned from cover art generation.');
+  return images;
 };
 
 
@@ -1162,7 +1214,12 @@ export interface SunoTrackResult {
   lyrics?: string;
   tags?: string;
   genre?: string;
+  duration?: number;
   status: string;
+  /** All versions Suno produced (normally 2). */
+  versions?: SunoTrackResult[];
+  /** Suno generation task id (needed for timestamped lyrics). */
+  taskId?: string;
 }
 
 /**
@@ -1177,24 +1234,93 @@ export const generateSunoTrack = async (params: {
   tags?: string;
   title?: string;
   make_instrumental?: boolean;
+  /** PUBLIC url of an uploaded audio file → Upload & Cover (keeps the melody). */
   audioUrl?: string;
+  /** PUBLIC url of an uploaded video (mp4/mov/webm, ≤241s, ≤100MB) → Suno uses its soundtrack as reference. */
+  videoUrl?: string;
+  /** Lyrics attachment (used with videoUrl, where `prompt` is the song idea). */
+  lyrics?: string;
   personaId?: string;
+  /** true when personaId is a Suno Voice voiceId (user's cloned voice). */
+  isVoicePersona?: boolean;
 }): Promise<SunoTrackResult> => {
-  const taskId = await generateMusic(
-    params.prompt,
-    params.tags ?? '',
-    params.title ?? 'Untitled',
-    params.audioUrl,
-    undefined,
-    undefined,
-    undefined,
-    params.personaId,
-    false,
-    { instrumental: params.make_instrumental ?? false },
-  );
+  /** Submit the job. `asVoice` decides personaModel (voice_persona vs style_persona). */
+  const submit = async (asVoice: boolean): Promise<string> => {
+    const personaModel: 'voice_persona' | 'style_persona' =
+      asVoice ? 'voice_persona' : 'style_persona';
 
-  // Poll until SUCCESS or FAILED (max ~3 min)
-  for (let i = 0; i < 60; i++) {
+    if (params.videoUrl) {
+      // Video reference — only supported in NON-custom mode (videoUrls).
+      // `prompt` is the core idea (max 3000 chars), `lyrics` is an attachment.
+      return generateMusic(
+        (params.prompt || '').slice(0, 3000),
+        params.tags ?? '',
+        '',
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        params.personaId,
+        !!params.personaId && asVoice,
+        {
+          customMode: false,
+          instrumental: params.make_instrumental ?? false,
+          videoUrls: [params.videoUrl],
+          ...(params.lyrics ? { lyrics: params.lyrics.slice(0, 5000) } : {}),
+        },
+      );
+    }
+    if (params.audioUrl) {
+      // Uploaded audio — Upload & Cover: new style, original melody kept.
+      return uploadAndCoverAudio({
+        uploadUrl: params.audioUrl,
+        model: 'V6',
+        instrumental: params.make_instrumental ?? false,
+        ...(params.prompt && !params.make_instrumental ? { lyrics: params.prompt.slice(0, 5000) } : {}),
+        ...(params.tags ? { style: params.tags.slice(0, 1000) } : {}),
+        ...(params.title ? { title: params.title.slice(0, 80) } : {}),
+        ...(params.personaId ? { personaId: params.personaId, personaModel } : {}),
+      });
+    }
+    return generateMusic(
+      params.prompt,
+      params.tags ?? '',
+      params.title ?? 'Untitled',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      params.personaId,
+      !!params.personaId && asVoice,
+      { instrumental: params.make_instrumental ?? false },
+    );
+  };
+
+  // Suno rejects (HTTP 422, no job created, no credits used) a persona whose
+  // personaModel doesn't match how it was made — e.g. older saved voices with
+  // no `type`. Retry once with the other model before giving up.
+  const isPersonaError = (e: any) => /invalid personaid|persona does not exist/i.test(e?.message || '');
+  let taskId: string;
+  try {
+    taskId = await submit(!!params.isVoicePersona);
+  } catch (e: any) {
+    if (!params.personaId || !isPersonaError(e)) throw e;
+    try {
+      taskId = await submit(!params.isVoicePersona);
+    } catch (e2: any) {
+      if (!isPersonaError(e2)) throw e2;
+      console.warn('[persona] rejected by API:', params.personaId, e2?.message);
+      throw new Error(
+        "The voice you picked can't be used right now.\n\n" +
+          "The music API doesn't recognise this voice for the current API key. " +
+          "Please delete this voice and create it again.\n\n" +
+          `API: ${e2?.message || 'Invalid personaId'}`,
+      );
+    }
+  }
+
+  // Poll until SUCCESS or FAILED (max ~5 min — covers / video references take longer)
+  for (let i = 0; i < 100; i++) {
     await new Promise((r) => setTimeout(r, 3000));
     const info = await getTaskInfo(taskId);
     if (!info) continue;
@@ -1202,10 +1328,11 @@ export const generateSunoTrack = async (params: {
     const status = (info.status || '').toUpperCase();
 
     if (status === 'SUCCESS') {
-      const track = Array.isArray(info.data) ? info.data[0] : info.data;
-      if (!track) throw new Error('Generation succeeded but no track data was returned.');
-      return {
-        id: track.id ?? taskId,
+      const rawList: any[] = Array.isArray(info.data) ? info.data : info.data ? [info.data] : [];
+      if (rawList.length === 0) throw new Error('Generation succeeded but no track data was returned.');
+      // Suno generates TWO versions per request — keep all of them
+      const versions: SunoTrackResult[] = rawList.map((track: any, idx: number) => ({
+        id: track.id ?? `${taskId}-${idx}`,
         audioUrl: track.audioUrl ?? '',
         imageUrl: track.imageUrl ?? '',
         videoUrl: track.videoUrl ?? '',
@@ -1213,12 +1340,22 @@ export const generateSunoTrack = async (params: {
         lyrics: track.lyrics,
         tags: track.tags,
         genre: track.genre,
+        duration: track.duration,
         status: 'SUCCESS',
-      };
+        taskId,
+      }));
+      return { ...versions[0], versions, taskId };
     }
 
-    if (status === 'FAILED' || status === 'SENSITIVE_WORD_ERROR') {
-      throw new Error(`Music generation failed with status: ${status}`);
+    if (/FAIL|ERROR|EXCEPTION/.test(status)) {
+      if (status === 'SENSITIVE_WORD_ERROR') {
+        throw new Error('Your lyrics or prompt contain words Suno does not allow. Please edit and try again.');
+      }
+      const reason = info.errorMessage ? `\n\nReason: ${info.errorMessage}` : '';
+      const voiceHint = params.personaId && params.isVoicePersona
+        ? '\n\nThis song used your custom voice. Try again in a minute (new voices can take a moment to become available), or re-create the voice with a longer, clearer singing sample.'
+        : '';
+      throw new Error(`Music generation failed (${status}).${reason}${voiceHint}`);
     }
     // Still PENDING / PROCESSING — keep polling
   }
@@ -1233,3 +1370,104 @@ export const generateSunoTrack = async (params: {
  * ai-studio.tsx which imported from the now-removed lib/suno module.
  */
 export const generateLyrics = generateLyricsApi;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SYNCED (TIMESTAMPED) LYRICS
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface SunoAlignedWord {
+  word: string;
+  success: boolean;
+  startS: number;
+  endS: number;
+  palign?: number;
+}
+
+/**
+ * getTimestampedLyrics
+ * POST /api/v1/generate/get-timestamped-lyrics
+ * Returns word-level timings (seconds) for a generated song.
+ * Instrumental tracks return no words.
+ */
+export const getTimestampedLyrics = async (
+  taskId: string,
+  audioId: string,
+): Promise<SunoAlignedWord[]> => {
+  const { apiKey, baseUrl } = await getApiConfig();
+  const response = await fetch(`${baseUrl}/generate/get-timestamped-lyrics`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ taskId, audioId }),
+  });
+  const json = await response.json().catch(() => null);
+  if (!response.ok || !json || json.code !== 200) {
+    throw new Error(json?.msg || `Timestamped lyrics failed (HTTP ${response.status})`);
+  }
+  return Array.isArray(json.data?.alignedWords) ? json.data.alignedWords : [];
+};
+
+const formatLrcTime = (sec: number): string => {
+  const safe = Math.max(0, sec || 0);
+  const m = Math.floor(safe / 60);
+  const s = safe - m * 60;
+  return `${String(m).padStart(2, '0')}:${s.toFixed(2).padStart(5, '0')}`;
+};
+
+/**
+ * Converts Suno aligned words into LRC text: "[mm:ss.xx] line".
+ * Suno embeds line breaks and section tags ("[Verse]", "[Chorus]") inside the words.
+ */
+export const alignedWordsToLrc = (words: SunoAlignedWord[]): string => {
+  const lines: { time: number; text: string }[] = [];
+  let current = '';
+  let currentStart: number | null = null;
+
+  const flush = () => {
+    const text = current.replace(/\s+/g, ' ').trim();
+    if (text && currentStart !== null) lines.push({ time: currentStart, text });
+    current = '';
+    currentStart = null;
+  };
+
+  for (const w of words) {
+    const parts = (w.word || '').split('\n');
+    parts.forEach((rawPart, idx) => {
+      if (idx > 0) flush(); // a newline inside the word ends the previous line
+      const part = rawPart.replace(/\[[^\]]*\]/g, ''); // drop [Verse]/[Chorus] tags
+      if (part.trim()) {
+        if (currentStart === null) currentStart = w.startS;
+        current += part;
+      }
+    });
+  }
+  flush();
+
+  return lines.map((l) => `[${formatLrcTime(l.time)}]${l.text}`).join('\n');
+};
+
+/**
+ * Fetches synced lyrics as LRC, retrying briefly because alignment can lag
+ * a few seconds behind generation SUCCESS. Returns null if unavailable.
+ */
+export const fetchSyncedLyricsLrc = async (
+  taskId: string,
+  audioId: string,
+  attempts = 4,
+): Promise<string | null> => {
+  for (let i = 0; i < attempts; i++) {
+    try {
+      const words = await getTimestampedLyrics(taskId, audioId);
+      if (words.length > 0) {
+        const lrc = alignedWordsToLrc(words);
+        if (lrc) return lrc;
+      }
+    } catch (e) {
+      console.log('Timestamped lyrics attempt failed:', e);
+    }
+    await new Promise((r) => setTimeout(r, 4000));
+  }
+  return null;
+};

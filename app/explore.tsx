@@ -146,7 +146,7 @@ export default function ExploreScreen() {
   return (
     <View style={styles.container}>
       {/* Background Gradient */}
-      <LinearGradient colors={['#3B2F2F', '#1A1515', '#0A0A0F']} style={StyleSheet.absoluteFillObject} />
+      <LinearGradient colors={['#3B2F2F', '#1A1515', '#0A0A0F']} style={StyleSheet.absoluteFill} />
 
       <SafeAreaView style={{ flex: 1 }} edges={['top']}>
         {/* Album Art Carousel */}

@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Animated, Alert } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { Audio } from 'expo-av';
+import { useAudioRecorder, useAudioPlayer, requestRecordingPermissionsAsync, RecordingPresets } from 'expo-audio';
 import { useThemeStore } from '../../store/themeStore';
 
 interface AudioRecorderProps {
@@ -15,42 +15,31 @@ export default function AudioRecorder({ onAudioReady, onClear, currentAudioUri, 
   const { COLORS } = useThemeStore();
   const styles = getStyles(COLORS);
   
-  const [recording, setRecording] = useState<Audio.Recording | null>(null);
-  const [sound, setSound] = useState<Audio.Sound | null>(null);
   const [isRecording, setIsRecording] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
   const [duration, setDuration] = useState(0);
   const [timer, setTimer] = useState<NodeJS.Timeout | null>(null);
 
+  const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
+  const player = useAudioPlayer(currentAudioUri ? currentAudioUri : null);
+
   useEffect(() => {
     return () => {
-      if (recording) {
-        recording.stopAndUnloadAsync().catch(() => {});
-      }
-      if (sound) {
-        sound.unloadAsync().catch(() => {});
-      }
       if (timer) clearInterval(timer);
     };
-  }, [recording, sound]);
+  }, [timer]);
 
   const startRecording = async () => {
     try {
-      if (sound) {
-        await sound.unloadAsync();
-        setSound(null);
+      if (player && isPlaying) {
+        player.pause();
+        setIsPlaying(false);
       }
       
-      const permission = await Audio.requestPermissionsAsync();
-      if (permission.status !== 'granted') return;
+      const { granted } = await requestRecordingPermissionsAsync();
+      if (!granted) return;
 
-      await Audio.setAudioModeAsync({
-        allowsRecordingIOS: true,
-        playsInSilentModeIOS: true,
-      });
-
-      const { recording } = await Audio.Recording.createAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY);
-      setRecording(recording);
+      recorder.record();
       setIsRecording(true);
       setDuration(0);
       
@@ -66,67 +55,39 @@ export default function AudioRecorder({ onAudioReady, onClear, currentAudioUri, 
   };
 
   const stopRecording = async () => {
-    if (!recording) return;
     setIsRecording(false);
     if (timer) clearInterval(timer);
 
-    await recording.stopAndUnloadAsync();
-    await Audio.setAudioModeAsync({ 
-      allowsRecordingIOS: false,
-      playsInSilentModeIOS: true,
-    });
+    await recorder.stop();
     
-    const uri = recording.getURI();
+    const uri = recorder.uri;
     if (uri) {
       onAudioReady(uri, `Voice_Memo_${new Date().getTime()}.m4a`);
     }
-    setRecording(null);
   };
 
   const playSound = async () => {
-    if (!currentAudioUri) return;
+    if (!currentAudioUri || !player) return;
     
     try {
-      await Audio.setAudioModeAsync({
-        allowsRecordingIOS: false,
-        playsInSilentModeIOS: true,
-      });
-
-      if (sound) {
-        await sound.playAsync();
-        setIsPlaying(true);
-        return;
-      }
-
-      const { sound: newSound } = await Audio.Sound.createAsync(
-        { uri: currentAudioUri },
-        { shouldPlay: true },
-        (status) => {
-          if (status.isLoaded && status.didJustFinish) {
-            setIsPlaying(false);
-            newSound.setPositionAsync(0);
-          }
-        }
-      );
-      setSound(newSound);
+      player.play();
       setIsPlaying(true);
     } catch (e: any) {
       console.error(e);
-      alert("Could not play this audio. If you recorded a very short clip, it might be corrupted. Please record again.");
+      alert("Could not play this audio.");
     }
   };
 
   const pauseSound = async () => {
-    if (sound) {
-      await sound.pauseAsync();
+    if (player) {
+      player.pause();
       setIsPlaying(false);
     }
   };
 
   const clearAudio = async () => {
-    if (sound) {
-      await sound.unloadAsync();
-      setSound(null);
+    if (player) {
+      player.pause();
     }
     setIsPlaying(false);
     setDuration(0);

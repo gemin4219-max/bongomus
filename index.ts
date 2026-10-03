@@ -17,14 +17,13 @@ if (global.ErrorUtils) {
       console.error('Failed to show error alert', e);
     }
     
-    // Call the original handler after showing the alert
-    if (originalHandler) {
-      originalHandler(error, isFatal);
-    }
+    // We purposefully DO NOT call originalHandler here if it is fatal
+    // because calling it tells React Native to crash the app immediately, 
+    // which prevents the user from reading the Alert!
   });
 }
 
 require('expo-router/entry');
 
-import TrackPlayer from 'react-native-track-player';
-TrackPlayer.registerPlaybackService(() => require('./service.js'));
+// import TrackPlayer from 'react-native-track-player';
+// TrackPlayer.registerPlaybackService(() => require('./service.js'));

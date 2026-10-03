@@ -17,14 +17,15 @@ import * as DocumentPicker from "expo-document-picker";
 import * as ImagePicker from "expo-image-picker";
 import { Ionicons } from "@expo/vector-icons";
 import { Image } from "expo-image";
-import { useRouter } from "expo-router";
+import { useRouter, useFocusEffect } from "expo-router";
 import { supabase } from "../../lib/supabase";
 import { useAuthStore } from "../../store/authStore";
+import { useLayoutStore } from "../../store/layoutStore";
 import { useThemeStore } from "../../store/themeStore";
 import { GENRES } from "../../constants";
 import * as FileSystem from "expo-file-system/legacy";
 import { decode } from "base64-arraybuffer";
-import { Audio } from 'expo-av';
+
 import { LinearGradient } from "expo-linear-gradient";
 import { BlurView } from "expo-blur";
 
@@ -42,6 +43,12 @@ export default function UploadScreen() {
   const router = useRouter();
   const session = useAuthStore((s) => s.session);
   const profile = useAuthStore((s) => s.profile);
+  
+  useFocusEffect(
+    React.useCallback(() => {
+      useLayoutStore.getState().setIsNavVisible(true);
+    }, [])
+  );
 
   const [uploadMode, setUploadMode] = useState<"single" | "ep">("single");
 
@@ -125,7 +132,7 @@ export default function UploadScreen() {
       <View style={styles.noAuth}>
         <LinearGradient
           colors={["#1a1a1a", "#000"]}
-          style={StyleSheet.absoluteFillObject}
+          style={StyleSheet.absoluteFill}
         />
         <View style={styles.noAuthIconContainer}>
           <Ionicons name="mic-outline" size={80} color={COLORS.gold} />
@@ -239,45 +246,18 @@ export default function UploadScreen() {
       return;
     }
     setUploading(true);
-    setProgress(0.05);
-    setProgressLabel("AI Genre Verification...");
-    try {
-      const { data: verifyData, error: verifyError } = await supabase.functions.invoke("verify-genre", {
-        body: {
-          title,
-          artist_name: mainArtist,
-          description,
-          claimed_genre: selectedGenre,
-          lyrics: lyricsSwahili || lyricsEnglish,
-        }
-      });
-      if (verifyError) throw verifyError;
-      if (verifyData && verifyData.is_valid === false) {
-        setUploading(false);
-        Alert.alert(
-          "Genre Misrepresentation Detected",
-          verifyData.reason || `Our AI detected this as ${verifyData.predicted_genre}, not ${selectedGenre}. Please correct the genre.`
-        );
-        return;
-      }
-
-      setProgress(0.1);
-      setProgressLabel("Preparing cover art...");
+    setProgress(0.1);
+    setProgressLabel("Preparing cover art...");
       
+    try {
       const userId = session.user.id;
       const coverUrl = await uploadCoverToStorage(userId);
       setProgress(0.4);
       setProgressLabel("Processing audio...");
 
       let durationSec = 0;
-      try {
-        const { sound, status } = await Audio.Sound.createAsync({
-          uri: audioFile.uri,
-        });
-        if (status.isLoaded && status.durationMillis)
-          durationSec = Math.floor(status.durationMillis / 1000);
-        await sound.unloadAsync();
-      } catch (e) {}
+      // Duration fetching disabled to remove expo-av dependency
+      // The backend can calculate this later if needed.
 
       const audioBase64 = await FileSystem.readAsStringAsync(audioFile.uri, {
         encoding: "base64",
@@ -355,31 +335,10 @@ export default function UploadScreen() {
       return Alert.alert("Error", "All tracks require a title and audio file.");
 
     setUploading(true);
-    setProgress(0.05);
-    setProgressLabel("AI Genre Verification...");
+    setProgress(0.1);
+    setProgressLabel("Uploading artwork...");
+
     try {
-      const { data: verifyData, error: verifyError } = await supabase.functions.invoke("verify-genre", {
-        body: {
-          title: epTitle,
-          artist_name: mainArtist,
-          description: epDescription,
-          claimed_genre: selectedGenre,
-          lyrics: epTracks[0]?.lyricsSwahili || epTracks[0]?.lyricsEnglish,
-        }
-      });
-      if (verifyError) throw verifyError;
-      if (verifyData && verifyData.is_valid === false) {
-        setUploading(false);
-        Alert.alert(
-          "Genre Misrepresentation Detected",
-          verifyData.reason || `Our AI detected this EP as ${verifyData.predicted_genre}, not ${selectedGenre}. Please correct the genre.`
-        );
-        return;
-      }
-
-      setProgress(0.1);
-      setProgressLabel("Uploading artwork...");
-
       const userId = session.user.id;
       const coverUrl = await uploadCoverToStorage(userId);
       setProgress(0.2);
@@ -404,14 +363,8 @@ export default function UploadScreen() {
         setProgressLabel(`Mastering Track ${i + 1} of ${epTracks.length}...`);
 
         let durationSec = 0;
-        try {
-          const { sound, status } = await Audio.Sound.createAsync({
-            uri: track.audioFile!.uri,
-          });
-          if (status.isLoaded && status.durationMillis)
-            durationSec = Math.floor(status.durationMillis / 1000);
-          await sound.unloadAsync();
-        } catch (e) {}
+        // Duration fetching disabled to remove expo-av dependency
+        // The backend can calculate this later if needed.
 
         const audioBase64 = await FileSystem.readAsStringAsync(
           track.audioFile!.uri,
@@ -513,7 +466,7 @@ export default function UploadScreen() {
     >
       <LinearGradient
         colors={["#101010", "#000000"]}
-        style={StyleSheet.absoluteFillObject}
+        style={StyleSheet.absoluteFill}
       />
 
       {/* Premium Header */}

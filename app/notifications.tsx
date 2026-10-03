@@ -172,12 +172,12 @@ export default function NotificationsFeed() {
             </TouchableOpacity>
           ),
           headerBackground: () => (
-            <BlurView intensity={70} tint="dark" style={StyleSheet.absoluteFillObject} />
+            <BlurView intensity={70} tint="dark" style={StyleSheet.absoluteFill} />
           )
         }}
       />
       
-      <LinearGradient colors={['#1a1710', '#0a0a0c', '#0a0a0c']} style={StyleSheet.absoluteFillObject} />
+      <LinearGradient colors={['#1a1710', '#0a0a0c', '#0a0a0c']} style={StyleSheet.absoluteFill} />
 
       {loading ? (
         <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>

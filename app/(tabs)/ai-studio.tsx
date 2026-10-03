@@ -20,6 +20,7 @@ import {
   RefreshControl,
   ActivityIndicator,
   InteractionManager,
+  Easing,
 } from "react-native";
 import {
   SafeAreaView,
@@ -28,6 +29,8 @@ import {
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { GlassView as BlurView } from "@/components/GlassView";
+import { decode } from "base64-arraybuffer";
+import * as Sharing from "expo-sharing";
 import { useThemeStore } from "../../store/themeStore";
 import { useAIStore } from "../../store/aiStore";
 import { useAuthStore } from "../../store/authStore";
@@ -35,26 +38,40 @@ import { supabase } from "../../lib/supabase";
 import {
   generateSunoTrack,
   generateLyrics,
+  fetchSyncedLyricsLrc,
 } from "../../lib/sunoApi";
 import {
   generateVoiceValidation,
   getVoiceValidationInfo,
   createCustomVoice,
   getCustomVoiceRecord,
+  checkVoiceAvailability,
   generateVoiceTest,
   getTaskInfo,
 } from "../../lib/sunoApi";
 import type { SunoTrackResult } from "../../lib/sunoApi";
 import { Stack, useRouter, useLocalSearchParams } from "expo-router";
-import { Audio } from 'expo-av';
+import { useAudioRecorder, useAudioPlayer, useAudioPlayerStatus, requestRecordingPermissionsAsync, setAudioModeAsync, RecordingPresets } from 'expo-audio';
 import * as ImagePicker from "expo-image-picker";
 import * as DocumentPicker from "expo-document-picker";
 import * as FileSystem from "expo-file-system/legacy";
 import * as MediaLibrary from "expo-media-library";
-import { usePlayerStore } from "../../store/playerStore";
+import { usePlayerStore, usePlaybackState, State } from "../../store/playerStore";
 import { CoverArtModal } from "../../components/CoverArtModal";
 import { EditSongDetailsModal } from "../../components/EditSongDetailsModal";
+import { PublishSongModal } from "../../components/PublishSongModal";
 import { ExtendSongModal } from "../../components/ExtendSongModal";
+import {
+  DashedChip,
+  PlusChip,
+  AudioWaveIcon,
+  LyricsIcon,
+  StylesIcon,
+  VoiceFaceIcon,
+  VideoIcon,
+} from "../../components/ai/CreateChips";
+import { SourcePreviewChip } from "../../components/ai/SourcePreviewChip";
+import * as Haptics from "expo-haptics";
 let FFmpegKit: any = null;
 let ReturnCode: any = null;
 // Removed ffmpeg-kit-react-native require to prevent Metro Fast Refresh crashes.
@@ -67,7 +84,7 @@ if (
   UIManager.setLayoutAnimationEnabledExperimental(true);
 }
 
-let AudioModule: any = Audio;
+// Legacy AudioModule removed
 let audioError: string | null = null;
 
 const PLACEHOLDERS = [
@@ -235,7 +252,58 @@ export default function AIStudioScreen() {
   }, []);
 
 
-  const { playTrack } = usePlayerStore();
+  const { playTrack, currentTrack, togglePlayPause, closePlayer } = usePlayerStore();
+  const { state: pbState } = usePlaybackState();
+  const isPlayingGlobal = pbState === State.Playing || pbState === State.Buffering;
+  
+  const spinAnim = useRef(new Animated.Value(0)).current;
+  
+  useEffect(() => {
+    // NOTE: a native-driven Animated.loop replays from the value it STARTED at.
+    // If the disc was paused mid-turn (e.g. at 0.5) the loop would only spin
+    // 0.5→1 (half a turn) and jump back. So: finish the current turn, then
+    // loop a clean 0→1 (full 360°).
+    let active = true;
+    let current: Animated.CompositeAnimation | null = null;
+    if (isPlayingGlobal) {
+      spinAnim.stopAnimation((v) => {
+        if (!active) return;
+        const progress = ((v % 1) + 1) % 1;
+        spinAnim.setValue(progress);
+        current = Animated.timing(spinAnim, {
+          toValue: 1,
+          duration: Math.max(1, 4000 * (1 - progress)),
+          easing: Easing.linear,
+          useNativeDriver: true,
+        });
+        current.start(({ finished }) => {
+          if (!finished || !active) return;
+          spinAnim.setValue(0);
+          current = Animated.loop(
+            Animated.timing(spinAnim, {
+              toValue: 1,
+              duration: 4000,
+              easing: Easing.linear,
+              useNativeDriver: true,
+            })
+          );
+          current.start();
+        });
+      });
+    } else {
+      spinAnim.stopAnimation();
+    }
+    return () => {
+      active = false;
+      if (current) current.stop();
+    };
+  }, [isPlayingGlobal]);
+
+  const spin = spinAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: ['0deg', '360deg']
+  });
+
   const { session, profile, fetchProfile } = useAuthStore() as any;
   const [prompt, setPrompt] = useState("");
   const [isRecording, setIsRecording] = useState(false);
@@ -311,6 +379,7 @@ export default function AIStudioScreen() {
             },
           ],
         }));
+        // setTasks (aiStore) already keeps songs that are still generating
         setTasks(mappedTasks as any);
       }
     }
@@ -335,13 +404,32 @@ export default function AIStudioScreen() {
   const [isCoverArtModalOpen, setIsCoverArtModalOpen] = useState(false);
   const [isEditSongDetailsModalOpen, setIsEditSongDetailsModalOpen] =
     useState(false);
+  const [isPublishSongModalOpen, setIsPublishSongModalOpen] = useState(false);
   const [isExtendModalOpen, setIsExtendModalOpen] = useState(false);
   const [selectedSongTask, setSelectedSongTask] = useState<any>(null);
   const [audioTitle, setAudioTitle] = useState("Untitled");
   const [selectedAudioUri, setSelectedAudioUri] = useState<string | null>(null);
   const hasAudio = !!selectedAudioUri;
-  const [sound, setSound] = useState<Audio.Sound | null>(null);
+  // Video picked from the + menu — Suno uses its soundtrack as the song reference
+  const [selectedVideo, setSelectedVideo] = useState<{
+    uri: string;
+    name: string;
+    mimeType?: string;
+  } | null>(null);
+  const hasSource = hasAudio || !!selectedVideo;
+  useEffect(() => {
+    if (selectedAudioUri) setSelectedVideo(null);
+  }, [selectedAudioUri]);
   const [isPlaying, setIsPlaying] = useState(false);
+
+  // expo-audio hooks
+  const audioPlayer = useAudioPlayer(selectedAudioUri);
+  // Sample-song player: source is loaded on demand with replace() when the user taps play
+  const testPlayer = useAudioPlayer(null);
+  
+  const mainRecorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
+  const wizardRecorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
+
 
   // Voice persona selection for generation
   const [selectedPersonaId, setSelectedPersonaId] = useState<string | null>(null);
@@ -366,7 +454,7 @@ export default function AIStudioScreen() {
         const info = await getTaskInfo(taskId);
         const status = (info?.status || "").toUpperCase();
         if (status === "SUCCESS") {
-          audioUrl = info?.data?.[0]?.audioUrl || info?.data?.[0]?.audio_url || "";
+          audioUrl = info?.data?.[0]?.audioUrl || (info?.data?.[0] as any)?.audio_url || "";
           break;
         } else if (status === "FAILED" || status === "SENSITIVE_WORD_ERROR") {
           throw new Error("Voice test generation failed. Please try again.");
@@ -385,23 +473,20 @@ export default function AIStudioScreen() {
     }
   };
 
-  const handlePlayTestAudio = async (personaId: string) => {
+    const handlePlayTestAudio = async (personaId: string) => {
     const url = testAudioUrls[personaId];
-    if (!url || !AudioModule) return;
+    if (!url) return;
     try {
-      if (testPlayingId === personaId && testSound) {
-        await testSound.stopAsync();
+      if (testPlayingId === personaId && testPlayer.playing) {
+        testPlayer.pause();
         setTestPlayingId(null);
         return;
       }
-      // Stop any currently playing test
-      if (testSound) { await testSound.stopAsync().catch(() => {}); }
-      const { sound: newSound } = await AudioModule.Sound.createAsync(
-        { uri: url },
-        { shouldPlay: true },
-        (status: any) => { if (status.didJustFinish) setTestPlayingId(null); }
-      );
-      setTestSound(newSound);
+      if (testPlayer.playing) {
+        testPlayer.pause();
+      }
+      testPlayer.replace({ uri: url });
+      testPlayer.play();
       setTestPlayingId(personaId);
     } catch (e) {
       console.error("Test audio play error", e);
@@ -431,6 +516,7 @@ export default function AIStudioScreen() {
     const [lyricsHistoryIndex, setLyricsHistoryIndex] = useState(0);
     const [isGeneratingLyrics, setIsGeneratingLyrics] = useState(false);
     const [isScanningLyrics, setIsScanningLyrics] = useState(false);
+    const [isExtractingAudioLyrics, setIsExtractingAudioLyrics] = useState(false);
 
   // Styles state
   const [isStylesMenuOpen, setIsStylesMenuOpen] = useState(false);
@@ -466,6 +552,10 @@ export default function AIStudioScreen() {
   const [validateText, setValidateText] = useState<string | null>(null);
   const [isPersonaGenerating, setIsPersonaGenerating] = useState(false);
   const [personaStatusText, setPersonaStatusText] = useState("");
+  // Wizard preview player — source is loaded explicitly in playWizardPreview
+  const wizardPlayer = useAudioPlayer(null);
+  const wizardPlayerStatus = useAudioPlayerStatus(wizardPlayer);
+  const wizardLoadedUriRef = useRef<string | null>(null);
 
   // Glowing circle animations for voice wizard
   const wizardPulse1 = useRef(new Animated.Value(1)).current;
@@ -508,96 +598,99 @@ export default function AIStudioScreen() {
   const [vizTick, setVizTick] = useState(0);
   useEffect(() => {
     if (!isWizardRecording) return;
-    const id = setInterval(() => setVizTick(t => t + 1), 80);
+    const startTime = Date.now();
+    const id = setInterval(() => {
+      setVizTick(t => t + 1);
+      setWizardDurationMs(Date.now() - startTime);
+    }, 80);
     return () => clearInterval(id);
   }, [isWizardRecording]);
 
-  const startWizardRecording = async () => {
+    const startWizardRecording = async () => {
     try {
-      if (!AudioModule) {
-        setIsWizardRecording(true);
-        return;
-      }
-      const permission = await AudioModule.requestPermissionsAsync();
+      const permission = await requestRecordingPermissionsAsync();
       if (permission.status !== "granted") {
         Alert.alert("Permission Denied", "Microphone access is needed to record your voice.");
         return;
       }
-      await AudioModule.setAudioModeAsync({
-        allowsRecordingIOS: true,
-        playsInSilentModeIOS: true,
-        staysActiveInBackground: false,
-        shouldDuckAndroid: true,
-        playThroughEarpieceAndroid: false,
-      });
-      const { recording } = await AudioModule.Recording.createAsync(
-        { ...AudioModule.RecordingOptionsPresets.HIGH_QUALITY, isMeteringEnabled: true },
-        (status: any) => {
-          if (status.isRecording) {
-            setWizardDurationMs(status.durationMillis);
-            // Suno voice persona requires 5–60 seconds
-            if (status.durationMillis >= 60000) {
-              stopWizardRecording(true);
-              return;
-            }
-            const db = status.metering !== undefined ? status.metering : -160;
-            const val = Math.max(0, Math.min(1, (db + 50) / 50));
-            setWizardVolume(val);
-          }
-        },
-        30
-      );
-      setWizardRecording(recording);
+      // IMPORTANT: expo-audio's player.pause() deactivates the iOS audio session
+      // ~100ms later (it ignores active recorders), which silently kills a recording
+      // that just started. So only pause if a preview is actually playing, and wait
+      // for that deferred deactivation to pass BEFORE starting the recorder.
+      if (isWizardPreviewPlaying || wizardPlayer.playing) {
+        try { wizardPlayer.pause(); } catch {}
+        setIsWizardPreviewPlaying(false);
+        await new Promise((r) => setTimeout(r, 350));
+      }
+      await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
+      // REQUIRED by expo-audio: without this, iOS never creates the recording file.
+      // Pass the preset explicitly so a fresh AAC/m4a recorder is always created.
+      await wizardRecorder.prepareToRecordAsync(RecordingPresets.HIGH_QUALITY);
+      wizardRecorder.record();
       setIsWizardRecording(true);
       setWizardDurationMs(0);
       setWizardVolume(0);
-    } catch (err) {
+    } catch (err: any) {
       console.error("Failed to start wizard recording", err);
-      Alert.alert("Error", "Could not start recording. Please try again.");
+      Alert.alert("Recording Error", err?.message || "Could not start recording.");
     }
   };
 
   // Wizard preview playback
-  const [wizardPreviewSound, setWizardPreviewSound] = useState<any>(null);
+  const [wizardPreviewSound, setWizardPreviewSound] = useState<any>(null); // Keep state if needed elsewhere, but don't use
   const [isWizardPreviewPlaying, setIsWizardPreviewPlaying] = useState(false);
 
   const playWizardPreview = async () => {
-    const currentUri = voiceWizardStep === 5 ? verifyAudioUri : personaAudioUri;
-    if (!currentUri || !AudioModule) return;
+    if (!wizardPlayer) return;
     try {
-      // Ensure audio is routed through the main speaker (not earpiece) on Android
-      await AudioModule.setAudioModeAsync({
-        allowsRecordingIOS: false,
-        playsInSilentModeIOS: true,
-        staysActiveInBackground: false,
-        shouldDuckAndroid: true,
-        playThroughEarpieceAndroid: false,
-      });
-      if (wizardPreviewSound) {
-        await wizardPreviewSound.playFromPositionAsync(0);
-        setIsWizardPreviewPlaying(true);
+      if (isWizardPreviewPlaying) {
+        wizardPlayer.pause();
+        setIsWizardPreviewPlaying(false);
         return;
       }
-      const { sound } = await AudioModule.Sound.createAsync(
-        { uri: currentUri },
-        { shouldPlay: true, volume: 1.0 },
-        (status: any) => {
-          if (status.didJustFinish || !status.isPlaying) {
-            setIsWizardPreviewPlaying(false);
-          }
+      const uriToPlay = voiceWizardStep === 5 ? verifyAudioUri : personaAudioUri;
+      if (!uriToPlay) {
+        Alert.alert('No Recording', 'Please record your voice first.');
+        return;
+      }
+      // Make sure the file is really there before trying to play it
+      if (!uriToPlay.startsWith('http')) {
+        const info = await FileSystem.getInfoAsync(uriToPlay);
+        if (!info.exists) {
+          Alert.alert('Recording Missing', 'The recording could not be found. Please record again.');
+          return;
         }
-      );
-      setWizardPreviewSound(sound);
+      }
+      // Switch the iOS audio session to playback so sound goes to the loudspeaker
+      await setAudioModeAsync({ allowsRecording: false, playsInSilentMode: true });
+      if (wizardLoadedUriRef.current !== uriToPlay) {
+        wizardPlayer.replace({ uri: uriToPlay });
+        wizardLoadedUriRef.current = uriToPlay;
+      } else {
+        await wizardPlayer.seekTo(0);
+      }
+      wizardPlayer.volume = 1.0;
+      wizardPlayer.play();
       setIsWizardPreviewPlaying(true);
     } catch (e) {
       console.error('Wizard preview play error', e);
+      setIsWizardPreviewPlaying(false);
       Alert.alert('Playback Error', 'Could not play the recording. Please try recording again.');
     }
   };
 
+  // Reset the play button when the preview finishes
+  useEffect(() => {
+    if (wizardPlayerStatus?.didJustFinish) {
+      setIsWizardPreviewPlaying(false);
+      wizardPlayer.seekTo(0).catch(() => {});
+    }
+  }, [wizardPlayerStatus?.didJustFinish]);
+
   const stopWizardPreview = async () => {
     try {
-      await wizardPreviewSound?.stopAsync();
+      // Only pause when actually playing — pause() deactivates the iOS audio session
+      if (wizardPlayer && wizardPlayer.playing) wizardPlayer.pause();
       setIsWizardPreviewPlaying(false);
     } catch (e) {}
   };
@@ -605,62 +698,81 @@ export default function AIStudioScreen() {
   // Clean up preview sound when wizard closes
   useEffect(() => {
     if (!isVoiceWizardOpen) {
-      wizardPreviewSound?.unloadAsync().catch(() => {});
-      setWizardPreviewSound(null);
+      try { if (wizardPlayer.playing) wizardPlayer.pause(); } catch {}
       setIsWizardPreviewPlaying(false);
     }
   }, [isVoiceWizardOpen]);
 
   const stopWizardRecording = async (save: boolean) => {
-    if (!wizardRecording) {
-      setIsWizardRecording(false);
-      if (save) {
-        if (voiceWizardStep === 2) {
-          setPersonaAudioUri("mock-persona-voice.m4a");
-          setVoiceWizardStep(3); // → Preview Source
-        } else if (voiceWizardStep === 4) {
-          setVerifyAudioUri("mock-persona-voice.m4a");
-          setVoiceWizardStep(5); // → Preview Verify
-        }
-      }
-      return;
-    }
+    const recordedMs = wizardDurationMs;
+    // What the native recorder ACTUALLY captured, in seconds (AVAudioRecorder.currentTime;
+    // drops to 0 if iOS interrupted the recording). The on-screen timer is just a JS clock.
+    let nativeMs = -1;
+    try { nativeMs = (wizardRecorder.currentTime ?? -1) * 1000; } catch {}
+    setIsWizardRecording(false);
+    setWizardVolume(0);
     try {
-      await wizardRecording.stopAndUnloadAsync();
-      const uri = wizardRecording.getURI();
-      setWizardRecording(null);
-      setIsWizardRecording(false);
-      setWizardVolume(0);
-
-      // Immediately switch back to playback mode so preview works on both iOS and Android
       try {
-        await AudioModule?.setAudioModeAsync({
-          allowsRecordingIOS: false,
-          playsInSilentModeIOS: true,
-          staysActiveInBackground: false,
-          shouldDuckAndroid: true,
-          playThroughEarpieceAndroid: false, // route through main speaker, NOT earpiece
-        });
-      } catch (_) {}
-
-      if (save && uri) {
-        const durationSec = wizardDurationMs / 1000;
-        if (durationSec < 5) {
-          Alert.alert("Too Short", "Please record at least 5 seconds of your voice.");
-          return;
-        }
-        if (voiceWizardStep === 2) {
-          setPersonaAudioUri(uri);
-          setWizardPreviewSound(null); // reset so it reloads the new recording
-          setVoiceWizardStep(3); // → Preview Source
-        } else if (voiceWizardStep === 4) {
-          setVerifyAudioUri(uri);
-          setWizardPreviewSound(null);
-          setVoiceWizardStep(5); // → Preview Verify
-        }
+        await wizardRecorder.stop();
+      } catch (e) {
+        console.warn("wizardRecorder.stop() failed", e);
       }
-    } catch (err) {
+      const rawUri = wizardRecorder.uri;
+      // Back to playback mode so the preview plays through the speaker
+      try { await setAudioModeAsync({ allowsRecording: false, playsInSilentMode: true }); } catch {}
+
+      if (!save) return;
+      // The voice-clone API rejects samples shorter than ~10 seconds
+      if (voiceWizardStep === 2 && recordedMs < 10000) {
+        Alert.alert("Too Short", "Please record at least 10 seconds of clear singing or speaking.");
+        return;
+      }
+      // Timer ran but the microphone captured (almost) nothing → recording was interrupted
+      if (nativeMs >= 0 && nativeMs < 1000 && recordedMs >= 2000) {
+        Alert.alert("Recording Interrupted", "The microphone stopped recording. Please tap record and try again.");
+        return;
+      }
+      if (!rawUri) {
+        Alert.alert("Recording Failed", "No audio was captured. Please try again.");
+        return;
+      }
+
+      const srcUri = rawUri.startsWith("file://") ? rawUri : `file://${rawUri}`;
+
+      // Wait (briefly) until iOS has finished writing the file to disk
+      let info: any = await FileSystem.getInfoAsync(srcUri);
+      for (let i = 0; i < 15 && (!info.exists || !info.size); i++) {
+        await new Promise((r) => setTimeout(r, 150));
+        info = await FileSystem.getInfoAsync(srcUri);
+      }
+      if (!info.exists || !info.size) {
+        Alert.alert("Recording Failed", "The recording was not saved. Please record again.");
+        return;
+      }
+      // A file this small contains no real audio (just a header) — don't send it
+      if (info.size < 8000) {
+        Alert.alert("Recording Failed", "No sound was captured. Check that the microphone isn't blocked and record again.");
+        return;
+      }
+
+      // Copy out of the recorder's cache into a stable location so it can't be
+      // overwritten/cleared before we preview or upload it
+      const kind = voiceWizardStep === 4 ? "verify" : "sample";
+      const ext = (rawUri.match(/\.(\w+)$/)?.[1] || "m4a").toLowerCase();
+      const destUri = `${FileSystem.documentDirectory}voice_${kind}_${Date.now()}.${ext}`;
+      await FileSystem.copyAsync({ from: srcUri, to: destUri });
+      wizardLoadedUriRef.current = null;
+
+      if (voiceWizardStep === 2) {
+        setPersonaAudioUri(destUri);
+        setVoiceWizardStep(3);
+      } else if (voiceWizardStep === 4) {
+        setVerifyAudioUri(destUri);
+        setVoiceWizardStep(5);
+      }
+    } catch (err: any) {
       console.error("Failed to stop wizard recording", err);
+      Alert.alert("Recording Error", err?.message || "Could not save the recording.");
     }
   };
 
@@ -680,6 +792,21 @@ export default function AIStudioScreen() {
    */
   // Ref used to cancel the persona creation mid-poll without freezing
   const personaCancelRef = useRef(false);
+  // True when the voice list was opened from the Create composer → reopen it after
+  const reopenComposerAfterVoiceRef = useRef(false);
+
+  // Map a local audio file to its extension + MIME type for upload
+  const getAudioFileType = (uri: string) => {
+    const ext = (uri.split("?")[0].match(/\.(\w+)$/)?.[1] || "m4a").toLowerCase();
+    const types: Record<string, string> = {
+      wav: "audio/wav",
+      mp3: "audio/mpeg",
+      m4a: "audio/mp4",
+      aac: "audio/aac",
+      caf: "audio/x-caf",
+    };
+    return { ext, contentType: types[ext] || "audio/mp4" };
+  };
 
   const handleAnalyzeVoice = async () => {
     if (!personaName.trim()) {
@@ -700,17 +827,17 @@ export default function AIStudioScreen() {
         let publicVoiceUrl = personaAudioUri;
 
         if (!personaAudioUri.startsWith("http")) {
-          const fileName = `persona_source_${session?.user?.id}_${Date.now()}.m4a`;
+          const { ext, contentType } = getAudioFileType(personaAudioUri);
+          const fileName = `voice_samples/persona_source_${session?.user?.id}_${Date.now()}.${ext}`;
           const fileBase64 = await FileSystem.readAsStringAsync(personaAudioUri, {
             encoding: FileSystem.EncodingType.Base64,
           });
-          const fileData = Uint8Array.from(atob(fileBase64), (c) => c.charCodeAt(0));
           const { error: uploadError } = await supabase.storage
-            .from("voice-samples")
-            .upload(fileName, fileData, { contentType: "audio/m4a", upsert: true });
+            .from("audio")
+            .upload(fileName, decode(fileBase64), { contentType, upsert: true });
           if (uploadError) throw new Error(`Upload failed: ${uploadError.message}`);
           const { data: urlData } = supabase.storage
-            .from("voice-samples")
+            .from("audio")
             .getPublicUrl(fileName);
           publicVoiceUrl = urlData.publicUrl;
         }
@@ -718,11 +845,13 @@ export default function AIStudioScreen() {
         if (personaCancelRef.current) return;
 
         setPersonaStatusText("Submitting voice for analysis...");
-        const durationSec = wizardDurationMs / 1000 || 30;
+        // API wants whole seconds, end > start. Send a 10–30s segment of the sample.
+        const durationSec = Math.floor((wizardDurationMs || 30000) / 1000);
+        const vocalEnd = Math.max(10, Math.min(durationSec, 30));
         const taskId = await generateVoiceValidation(
           publicVoiceUrl,
           0,
-          Math.min(durationSec, 60),
+          vocalEnd,
           "en",
           undefined,
         );
@@ -730,27 +859,27 @@ export default function AIStudioScreen() {
         if (personaCancelRef.current) return;
 
         setPersonaStatusText("Analyzing your voice... (this takes ~30s)");
-        let validated = false;
         let vText = "";
-        for (let i = 0; i < 30; i++) {
+        for (let i = 0; i < 40; i++) {
           if (personaCancelRef.current) return;
           await new Promise((r) => setTimeout(r, 3500));
           if (personaCancelRef.current) return;
 
           const info = await getVoiceValidationInfo(taskId);
-          if (!info) continue;
+          if (!info) continue; // transient — retry
 
-          const status = (info?.status || info?.successFlag || "").toUpperCase();
-          if (status === "SUCCESS" || status === "COMPLETE") {
-            vText = info?.response?.validateText || info?.validateText || "I authorize this voice cloning process.";
-            validated = true;
+          // Documented statuses: wait_processing | processing_validate |
+          // processing_validate_fail | wait_validating | success | fail
+          if (info.status === "wait_validating" && info.validateInfo) {
+            vText = info.validateInfo;
             break;
-          } else if (status === "FAILED" || status === "ERROR") {
-            throw new Error(info?.failReason || "Voice validation failed. Please try a cleaner recording.");
           }
-          setPersonaStatusText(`Analyzing your voice... (${i + 1}/30)`);
+          if (info.status === "processing_validate_fail" || info.status === "fail") {
+            throw new Error(info.errorMessage || "Voice validation failed. Please try a cleaner recording.");
+          }
+          setPersonaStatusText(`Analyzing your voice... (${i + 1}/40)`);
         }
-        if (!validated) throw new Error("Voice analysis timed out.");
+        if (!vText) throw new Error("Voice analysis timed out. Please try again.");
         if (personaCancelRef.current) return;
 
         setValidateTaskId(taskId);
@@ -783,17 +912,17 @@ export default function AIStudioScreen() {
         let publicVerifyUrl = verifyAudioUri;
 
         if (!verifyAudioUri.startsWith("http")) {
-          const fileName = `persona_verify_${session?.user?.id}_${Date.now()}.m4a`;
+          const { ext, contentType } = getAudioFileType(verifyAudioUri);
+          const fileName = `voice_samples/persona_verify_${session?.user?.id}_${Date.now()}.${ext}`;
           const fileBase64 = await FileSystem.readAsStringAsync(verifyAudioUri, {
             encoding: FileSystem.EncodingType.Base64,
           });
-          const fileData = Uint8Array.from(atob(fileBase64), (c) => c.charCodeAt(0));
           const { error: uploadError } = await supabase.storage
-            .from("voice-samples")
-            .upload(fileName, fileData, { contentType: "audio/m4a", upsert: true });
+            .from("audio")
+            .upload(fileName, decode(fileBase64), { contentType, upsert: true });
           if (uploadError) throw new Error(`Upload failed: ${uploadError.message}`);
           const { data: urlData } = supabase.storage
-            .from("voice-samples")
+            .from("audio")
             .getPublicUrl(fileName);
           publicVerifyUrl = urlData.publicUrl;
         }
@@ -814,38 +943,57 @@ export default function AIStudioScreen() {
         if (personaCancelRef.current) return;
 
         setPersonaStatusText("Finalizing your AI voice... (this takes ~1 min)");
-        let personaId = "";
-        for (let i = 0; i < 40; i++) {
+        let voiceId = "";
+        for (let i = 0; i < 60; i++) {
           if (personaCancelRef.current) return;
           await new Promise((r) => setTimeout(r, 4000));
           if (personaCancelRef.current) return;
 
           const record = await getCustomVoiceRecord(createTaskId);
-          if (!record) continue;
+          if (!record) continue; // transient — retry
 
-          const status = (record?.status || record?.successFlag || "").toUpperCase();
-          if (status === "SUCCESS" || status === "COMPLETE") {
-            personaId = record?.response?.voiceId || record?.voiceId || createTaskId;
+          if (record.status === "success" && record.voiceId) {
+            voiceId = record.voiceId;
             break;
-          } else if (status === "FAILED" || status === "ERROR") {
-            throw new Error(record?.failReason || "Failed to create voice persona.");
           }
-          setPersonaStatusText(`Finalizing your AI voice... (${i + 1}/40)`);
+          if (record.status === "fail" || record.status === "processing_validate_fail") {
+            throw new Error(
+              record.errorMessage ||
+                "Voice verification failed. Make sure you sing/say the exact phrase shown, in a quiet place.",
+            );
+          }
+          setPersonaStatusText(`Finalizing your AI voice... (${i + 1}/60)`);
         }
-        if (!personaId) throw new Error("Persona creation timed out.");
+        if (!voiceId) throw new Error("Voice creation timed out. Please try again.");
+
+        // Per API docs: confirm the voice is usable before songs depend on it.
+        setPersonaStatusText("Getting your voice ready to sing...");
+        for (let i = 0; i < 15; i++) {
+          if (personaCancelRef.current) return;
+          try {
+            if (await checkVoiceAvailability(createTaskId)) break;
+          } catch {
+            break; // availability endpoint failing is non-fatal
+          }
+          await new Promise((r) => setTimeout(r, 4000));
+        }
 
         addPersona({
-          id: personaId,
+          id: voiceId,
           name: personaName.trim(),
-          description: personaDescription.trim(),
+          description: personaDescription.trim() || "My cloned voice",
           createdAt: Date.now(),
+          type: "voice",
         });
+        // Auto-select it so the very next song is sung in this voice
+        setSelectedPersonaId(voiceId);
 
         Alert.alert(
           "🎤 Voice Created!",
-          `"${personaName.trim()}" is ready! You can now use it when generating songs.`,
+          `"${personaName.trim()}" is ready and selected. Your next song will be sung in your voice.`,
         );
         setIsVoiceWizardOpen(false);
+        reopenComposerIfNeeded();
         setVoiceWizardStep(1);
         setPersonaName("");
         setPersonaDescription("");
@@ -882,8 +1030,8 @@ export default function AIStudioScreen() {
     if (isRecordModalOpen) {
       interval = setInterval(() => {
         setAnimationTick((prev) => prev + 1);
-        if (isRecording && typeof AudioModule === "undefined") {
-          setVolume(Math.random() * 0.8 + 0.2);
+        if (isRecording) {
+          setVolume(Math.random() * 0.8 + 0.2); // Mocked volume meter
         }
       }, 50);
     }
@@ -921,57 +1069,124 @@ export default function AIStudioScreen() {
   };
 
   const handleScanLyrics = async () => {
-      try {
-        const { status } = await ImagePicker.requestCameraPermissionsAsync();
-        if (status !== "granted") {
-          Alert.alert("Permission Needed", "Please grant camera permission to scan your lyrics on paper.");
-          return;
-        }
+    try {
+      const { status } = await ImagePicker.requestCameraPermissionsAsync();
+      if (status !== "granted") {
+        Alert.alert("Permission Needed", "Please grant camera permission to scan your lyrics on paper.");
+        return;
+      }
 
-        const result = await ImagePicker.launchCameraAsync({
-          mediaTypes: ImagePicker.MediaTypeOptions.Images,
-          base64: true,
-          quality: 0.5,
+      const result = await ImagePicker.launchCameraAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        base64: true,
+        quality: 0.2, // Reduced quality to keep size under 1MB for OCR API
+        allowsEditing: true, // Let user crop to just the lyrics
+      });
+
+      if (!result.canceled && result.assets && result.assets.length > 0 && result.assets[0].base64) {
+        setIsScanningLyrics(true);
+        const base64Image = "data:image/jpeg;base64," + result.assets[0].base64;
+        
+        const formData = new FormData();
+        formData.append("base64Image", base64Image);
+        formData.append("language", "eng");
+        formData.append("isOverlayRequired", "false");
+
+        // Using free OCR.space API endpoint
+        const response = await fetch("https://api.ocr.space/parse/image", {
+          method: "POST",
+          headers: {
+            apikey: "helloworld",
+          },
+          body: formData,
         });
 
-        if (!result.canceled && result.assets && result.assets.length > 0 && result.assets[0].base64) {
-          setIsScanningLyrics(true);
-          const base64Image = "data:image/jpeg;base64," + result.assets[0].base64;
-          
-          const formData = new FormData();
-          formData.append("base64Image", base64Image);
-          formData.append("language", "eng");
-          formData.append("isOverlayRequired", "false");
+        const data = await response.json();
+        if (data && data.ParsedResults && data.ParsedResults.length > 0) {
+          const parsedText = data.ParsedResults[0].ParsedText;
+          if (parsedText && parsedText.trim().length > 0) {
+            let formattedText = parsedText.trim();
+            // Normalize line endings
+            formattedText = formattedText.replace(/\r\n/g, '\n');
+            // Add an extra blank line before numbers like "1.", "2." or words like "Verse", "Chorus"
+            formattedText = formattedText.replace(/\n(\d+[\.\)]\s*|(?:Verse|Chorus|Bridge)\s*\d*:?\s*)/gi, '\n\n$1');
+            // Remove any excessive blank lines
+            formattedText = formattedText.replace(/\n{3,}/g, '\n\n');
 
-          // Using free OCR.space API endpoint
-          const response = await fetch("https://api.ocr.space/parse/image", {
-            method: "POST",
-            headers: {
-              apikey: "helloworld",
-            },
-            body: formData,
-          });
-
-          const data = await response.json();
-          if (data && data.ParsedResults && data.ParsedResults.length > 0) {
-            const parsedText = data.ParsedResults[0].ParsedText;
-            if (parsedText && parsedText.trim().length > 0) {
-              setLyricsText((prev) => prev ? prev + "\n\n" + parsedText.trim() : parsedText.trim());
-              Alert.alert("Scan Success", "Lyrics extracted successfully!");
-            } else {
-              Alert.alert("No Text Found", "Could not read any text from the image.");
-            }
+            setLyricsText((prev) => prev ? prev + "\n\n" + formattedText : formattedText);
+            Alert.alert("Scan Success", "Lyrics extracted and formatted successfully!");
           } else {
-            Alert.alert("Scan Error", "Failed to parse the image. Please try again.");
+            Alert.alert("No Text Found", "Could not read any text from the image.");
           }
+        } else {
+          Alert.alert("Scan Error", data?.ErrorMessage?.[0] || "Failed to parse the image. It might be too large or blurry.");
         }
-      } catch (err) {
-        console.error("Scan lyrics error", err);
-        Alert.alert("Error", "An error occurred while scanning.");
-      } finally {
-        setIsScanningLyrics(false);
       }
-    };
+    } catch (err) {
+      console.error("Scan lyrics error", err);
+      Alert.alert("Error", "An error occurred while scanning. Please try again.");
+    } finally {
+      setIsScanningLyrics(false);
+    }
+  };
+
+  const handleExtractLyricsFromMedia = async () => {
+    if (!selectedAudioUri && !selectedVideo) {
+      Alert.alert("No Media", "Please upload an audio or video file first to extract lyrics.");
+      return;
+    }
+    setIsExtractingAudioLyrics(true);
+    try {
+      let mediaUrl;
+      let kind: "audio" | "video";
+      let mimeType;
+
+      if (selectedVideo) {
+        mediaUrl = await uploadCreateSource(selectedVideo.uri, "video", selectedVideo.mimeType);
+        kind = "video";
+        mimeType = selectedVideo.mimeType;
+      } else if (selectedAudioUri) {
+        mediaUrl = await uploadCreateSource(selectedAudioUri, "audio");
+        kind = "audio";
+      }
+
+      if (!mediaUrl) throw new Error("Could not upload media for transcription.");
+
+      const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL || "";
+      const anonKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY || "";
+      const { data: s } = await supabase.auth.getSession();
+      const token = s.session?.access_token || anonKey;
+
+      const res = await fetch(`${supabaseUrl}/functions/v1/transcribe-lyrics`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ url: mediaUrl, kind, mimeType }),
+      });
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || "Failed to transcribe lyrics");
+      }
+
+      const { lyrics, instrumental } = await res.json();
+      if (instrumental) {
+        Alert.alert("Instrumental", "No vocals detected in the audio.");
+      } else if (lyrics) {
+        setLyricsText((prev) => (prev ? prev + "\n\n" + lyrics : lyrics));
+        saveLyricsToHistory();
+        Alert.alert("Success", "Lyrics extracted successfully!");
+      } else {
+        Alert.alert("No Lyrics", "Could not extract any lyrics.");
+      }
+    } catch (e: any) {
+      Alert.alert("Error", e.message || "Failed to extract lyrics.");
+    } finally {
+      setIsExtractingAudioLyrics(false);
+    }
+  };
 
     const handleGenerateLyrics = async () => {
     if (!session?.user?.id) {
@@ -1030,10 +1245,10 @@ export default function AIStudioScreen() {
         setLyricsHistoryIndex(newHistory.length - 1);
 
         // Pre-fill title and style if kie.ai returned suggestions
-        if (response.title && !songTitle?.trim()) setSongTitle(response.title);
-        if (response.tags && !selectedStyles?.length) {
+        if (response.title && !advancedTitle?.trim()) setAdvancedTitle(response.title);
+        if (response.tags && !stylesText?.trim()) {
           const suggested = response.tags.split(',').map((t: string) => t.trim()).filter(Boolean).slice(0, 2);
-          if (suggested.length) setSelectedStyles(suggested);
+          if (suggested.length) setStylesText(suggested.join(', '));
         }
 
         // Deduct 1 from lyrics_used in Supabase
@@ -1165,13 +1380,43 @@ export default function AIStudioScreen() {
     };
   }, [isRecording]);
 
+  /** Reset the whole Create studio to a blank state. */
+  const clearStudio = () => {
+    setPrompt("");
+    setLyricsText("");
+    setStylesText("");
+    setAdvancedTitle("");
+    setSelectedAudioUri(null);
+    setSelectedVideo(null);
+    setAudioTitle("");
+    setLyricsHistory([""]);
+    setLyricsHistoryIndex(0);
+    setStylesHistory([""]);
+    setStylesHistoryIndex(0);
+    setSelectedPersonaId(null);
+    setIsInputExpanded(false);
+  };
+
   const handleGenerate = async () => {
-    if (!prompt.trim() && !hasAudio) return;
+    if (!prompt.trim() && !lyricsText.trim() && !hasSource) return;
 
     if (!session?.user?.id) {
       Alert.alert(
         "Authentication Required",
         "Please sign in to generate music.",
+      );
+      return;
+    }
+
+    // A cloned voice needs words to sing — without lyrics/prompt the song is instrumental
+    const selectedIsVoice =
+      !!selectedPersonaId &&
+      personas.find((p: any) => p.id === selectedPersonaId)?.type === "voice";
+    // (with a video, Suno writes the lyrics itself, so it's allowed)
+    if (selectedIsVoice && !prompt.trim() && !lyricsText.trim() && !selectedVideo) {
+      Alert.alert(
+        "Add lyrics for your voice",
+        "Your voice needs words to sing. Add lyrics or describe the song first.",
       );
       return;
     }
@@ -1197,7 +1442,7 @@ export default function AIStudioScreen() {
       .eq("id", session.user.id);
 
     if (creditError) {
-      Alert.alert("Error", "Failed to deduct credits. Please try again.");
+      Alert.alert("Error", `Failed to deduct credits. ${creditError.message}`);
       return;
     }
 
@@ -1211,7 +1456,29 @@ export default function AIStudioScreen() {
     }
 
     const newTaskId = `generate-${Date.now()}`;
-    const taskTitle = prompt.trim() || "Generated Audio";
+    // Title priority: typed title → first line of lyrics → first words of prompt
+    const deriveTitleFromText = (text: string): string => {
+      const firstLine = (text || "")
+        .split("\n")
+        .map((l) =>
+          l
+            .replace(/\[[^\]]*\]/g, "") // [Verse], [Chorus]
+            .replace(/^\s*\(?\d+[.)]\s*/, "") // "1." / "2)"
+            .replace(/^\s*(verse|chorus|hook|intro|outro|bridge|pre-chorus|kiitikio|ubeti)\s*\d*\s*[:\-]?\s*/i, "")
+            .replace(/["“”*_#]/g, "")
+            .trim(),
+        )
+        .find((l) => l.length > 0);
+      if (!firstLine) return "";
+      const words = firstLine.split(/\s+/).slice(0, 5).join(" ");
+      const clean = words.replace(/[,.;:!?\-]+$/, "").slice(0, 40).trim();
+      return clean.charAt(0).toUpperCase() + clean.slice(1);
+    };
+    const taskTitle =
+      advancedTitle.trim() ||
+      deriveTitleFromText(lyricsText) ||
+      deriveTitleFromText(prompt) ||
+      "Untitled Song";
 
     // Add task in PROCESSING state — it will update to SUCCESS when polling completes
     addTask(newTaskId, taskTitle, "GENERATE");
@@ -1222,64 +1489,175 @@ export default function AIStudioScreen() {
     const capturedLyrics = lyricsText;
     const capturedStyles = stylesText;
     const capturedAudioUri = selectedAudioUri;
+    const capturedVideo = selectedVideo;
     const capturedPersonaId = selectedPersonaId;
-    setPrompt("");
-    setIsInputExpanded(false);
+    const capturedIsVoice =
+      !!capturedPersonaId &&
+      personas.find((p: any) => p.id === capturedPersonaId)?.type === "voice";
+    // Song submitted → clear the studio so the user starts fresh.
+    // (Inputs are captured above and restored if generation fails.)
+    const capturedTitle = advancedTitle;
+    clearStudio();
 
     // Run generation in the background so the UI stays responsive
     (async () => {
       try {
-        const result: SunoTrackResult = await generateSunoTrack({
-          prompt: capturedLyrics || capturedPrompt,
-          tags: capturedStyles || (!capturedLyrics ? capturedPrompt : ""),
-          title: taskTitle,
-          make_instrumental: !capturedLyrics,
-          audioUrl: capturedAudioUri || undefined,
-          personaId: capturedPersonaId || undefined,
+        // Suno needs PUBLIC urls — push local picks to our storage first
+        let videoUrl: string | undefined;
+        let audioUrl: string | undefined;
+        if (capturedVideo) {
+          videoUrl = await uploadCreateSource(capturedVideo.uri, "video", capturedVideo.mimeType);
+        } else if (capturedAudioUri) {
+          audioUrl = await uploadCreateSource(capturedAudioUri, "audio");
+        }
+
+        const result: SunoTrackResult = await generateSunoTrack(
+          videoUrl
+            ? {
+                // Video: prompt = song idea, lyrics = attachment, Suno writes words if none
+                prompt: capturedPrompt,
+                lyrics: capturedLyrics || undefined,
+                tags: capturedStyles,
+                title: taskTitle,
+                make_instrumental: false,
+                videoUrl,
+                personaId: capturedPersonaId || undefined,
+                isVoicePersona: capturedIsVoice,
+              }
+            : {
+                prompt: capturedLyrics || capturedPrompt,
+                tags: capturedStyles || (!capturedLyrics ? capturedPrompt : ""),
+                title: taskTitle,
+                make_instrumental: !capturedLyrics && !capturedPrompt,
+                audioUrl,
+                personaId: capturedPersonaId || undefined,
+                isVoicePersona: capturedIsVoice,
+              },
+        );
+
+        const versions: SunoTrackResult[] =
+          result.versions && result.versions.length > 0 ? result.versions : [result];
+
+        // Show ALL versions (Suno makes 2) — each version gets its own row
+        const buildTrack = (v: SunoTrackResult, idx: number) => ({
+          id: v.id || `${newTaskId}-${idx}`,
+          audioUrl: v.audioUrl || "",
+          videoUrl: v.videoUrl || "",
+          imageUrl: v.imageUrl || "",
+          title: `${taskTitle}${versions.length > 1 ? ` (v${idx + 1})` : ""}`,
+          duration: v.duration,
+          prompt: capturedPrompt || capturedLyrics,
+          lyrics: capturedLyrics || v.lyrics || capturedPrompt,
+          genre: capturedStyles || "AI Generated",
+          tags: capturedStyles || "AI Generated",
+          status: "SUCCESS",
+          taskId: result.taskId,
         });
+        updateTask(newTaskId, "SUCCESS", [buildTrack(versions[0], 0)] as any);
+        for (let idx = 1; idx < versions.length; idx++) {
+          const extraId = `${newTaskId}-v${idx + 1}`;
+          addTask(extraId, `${taskTitle} (v${idx + 1})`, "GENERATE");
+          updateTask(extraId, "SUCCESS", [buildTrack(versions[idx], idx)] as any);
+        }
 
-        const trackId = result.id || newTaskId;
-        const finalAudioUrl = result.audioUrl || "";
-        const finalImageUrl = result.imageUrl || "";
-        const finalTitle = result.title || taskTitle;
+        // Persist every version to Supabase so it survives refresh / new phone
+        if (session?.user?.id) {
+          for (let idx = 0; idx < versions.length; idx++) {
+            const v = versions[idx];
+            if (!v.audioUrl) continue;
+            const versionTitle = `${taskTitle}${versions.length > 1 ? ` (v${idx + 1})` : ""}`;
+            (async () => {
+              try {
+                // 1. Insert the row IMMEDIATELY (with Suno URLs) so a refresh never loses it
+                const { data: inserted, error: insertError } = await supabase
+                  .from("tracks")
+                  .insert({
+                    user_id: session.user.id,
+                    title: versionTitle,
+                    artist_name: profile?.username || "BongoBox Creator",
+                    genre: capturedStyles || "AI Generated",
+                    lyrics: capturedLyrics || v.lyrics || capturedPrompt || null,
+                    cover_url: v.imageUrl || null,
+                    audio_url: v.audioUrl,
+                    duration_sec: Math.floor(v.duration || 0),
+                    is_public: false,
+                    is_ai: true,
+                  })
+                  .select("id")
+                  .single();
 
-        updateTask(newTaskId, "SUCCESS", [
-          {
-            id: trackId,
-            audioUrl: finalAudioUrl,
-            videoUrl: result.videoUrl || "",
-            imageUrl: finalImageUrl,
-            title: finalTitle,
-            prompt: capturedPrompt || capturedLyrics,
-            lyrics: capturedLyrics || capturedPrompt,
-            genre: capturedStyles || "AI Generated",
-            tags: capturedStyles || "AI Generated",
-            status: "SUCCESS",
-          } as any,
-        ]);
+                if (insertError || !inserted) {
+                  console.error("Supabase track insert error:", insertError);
+                  Alert.alert(
+                    "Song not saved",
+                    `"${versionTitle}" was created but could not be saved to your account: ${insertError?.message || "unknown error"}`,
+                  );
+                  return;
+                }
+                const rowId = inserted.id;
 
-        // Persist to Supabase
-        if (session?.user?.id && finalAudioUrl) {
-          supabase
-            .from("tracks")
-            .insert({
-              id: trackId,
-              user_id: session.user.id,
-              title: finalTitle,
-              artist_name: profile?.username || "BongoBox Creator",
-              genre: capturedStyles || "AI Generated",
-              cover_url: finalImageUrl,
-              audio_url: finalAudioUrl,
-              duration_sec: 0,
-              is_public: false,
-            })
-            .then(({ error: insertError }) => {
-              if (insertError)
-                console.error("Supabase track insert error:", insertError);
-            });
+                // 1b. Fetch Suno's word-level timings → LRC synced lyrics
+                if (result.taskId && v.id && capturedLyrics) {
+                  fetchSyncedLyricsLrc(result.taskId, v.id).then(async (lrc) => {
+                    if (!lrc) return;
+                    await supabase.from("tracks").update({ lyrics: lrc }).eq("id", rowId);
+                    const localTaskId = idx === 0 ? newTaskId : `${newTaskId}-v${idx + 1}`;
+                    updateTask(localTaskId, "SUCCESS", [
+                      { ...buildTrack(v, idx), lyrics: lrc },
+                    ] as any);
+                    // If this song is playing right now, refresh its lyrics live
+                    const playing = usePlayerStore.getState().currentTrack;
+                    if (playing && (playing.id === v.id || playing.id === rowId)) {
+                      usePlayerStore.setState({ currentTrack: { ...playing, lyrics: lrc } as any });
+                    }
+                  }).catch(() => {});
+                }
+
+                // 2. Copy MP3 + cover into our own storage (Suno links expire)
+                const updates: Record<string, any> = {};
+                const audioFileUri = FileSystem.cacheDirectory + `${rowId}.mp3`;
+                await FileSystem.downloadAsync(v.audioUrl, audioFileUri);
+                const audioBase64 = await FileSystem.readAsStringAsync(audioFileUri, { encoding: FileSystem.EncodingType.Base64 });
+                const { error: audioUploadError } = await supabase.storage
+                  .from("audio")
+                  .upload(`ai_tracks/${rowId}.mp3`, decode(audioBase64), { contentType: "audio/mpeg", upsert: true });
+                if (!audioUploadError) {
+                  updates.audio_url = supabase.storage.from("audio").getPublicUrl(`ai_tracks/${rowId}.mp3`).data.publicUrl;
+                } else {
+                  console.error("Audio upload error:", audioUploadError);
+                }
+
+                if (v.imageUrl) {
+                  const imageFileUri = FileSystem.cacheDirectory + `${rowId}.jpg`;
+                  await FileSystem.downloadAsync(v.imageUrl, imageFileUri);
+                  const imageBase64 = await FileSystem.readAsStringAsync(imageFileUri, { encoding: FileSystem.EncodingType.Base64 });
+                  const { error: imageUploadError } = await supabase.storage
+                    .from("images")
+                    .upload(`ai_covers/${rowId}.jpg`, decode(imageBase64), { contentType: "image/jpeg", upsert: true });
+                  if (!imageUploadError) {
+                    updates.cover_url = supabase.storage.from("images").getPublicUrl(`ai_covers/${rowId}.jpg`).data.publicUrl;
+                  }
+                }
+
+                if (Object.keys(updates).length > 0) {
+                  await supabase.from("tracks").update(updates).eq("id", rowId);
+                }
+              } catch (err) {
+                console.error("Error saving AI track to Supabase:", err);
+              }
+            })();
+          }
         }
       } catch (e: any) {
         updateTask(newTaskId, "FAILED");
+        // Give the user their inputs back so they can fix & retry without retyping
+        setPrompt(capturedPrompt);
+        setLyricsText(capturedLyrics);
+        setStylesText(capturedStyles);
+        setAdvancedTitle(capturedTitle);
+        setSelectedPersonaId(capturedPersonaId);
+        setSelectedAudioUri(capturedAudioUri);
+        setSelectedVideo(capturedVideo);
         Alert.alert(
           "Generation Failed",
           e.message || "There was an error generating the track. Your credit has been refunded.",
@@ -1295,7 +1673,55 @@ export default function AIStudioScreen() {
       }
     })();
 
-    setSelectedAudioUri(null);
+  };
+
+  /**
+   * Upload a locally picked audio/video file to Supabase storage and return a
+   * PUBLIC url Suno can fetch. Streams the file (no base64) so large videos
+   * don't blow up memory.
+   */
+  const uploadCreateSource = async (
+    uri: string,
+    kind: "audio" | "video",
+    mimeType?: string,
+  ): Promise<string> => {
+    if (/^https?:\/\//i.test(uri)) return uri; // already public (e.g. remix)
+
+    const extMatch = uri.split("?")[0].match(/\.([a-z0-9]{2,5})$/i);
+    const ext = (extMatch?.[1] || (kind === "video" ? "mp4" : "m4a")).toLowerCase();
+    const contentType =
+      mimeType ||
+      (kind === "video"
+        ? ext === "mov" ? "video/quicktime" : ext === "webm" ? "video/webm" : "video/mp4"
+        : ext === "mp3" ? "audio/mpeg" : ext === "wav" ? "audio/wav" : ext === "ogg" ? "audio/ogg" : "audio/mp4");
+
+    const userId = session?.user?.id || "anon";
+    const path = `create_sources/${userId}/${Date.now()}.${ext}`;
+    const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL || "";
+    const anonKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY || "";
+    const { data: s } = await supabase.auth.getSession();
+    const token = s.session?.access_token || anonKey;
+
+    const res = await FileSystem.uploadAsync(
+      `${supabaseUrl}/storage/v1/object/audio/${path}`,
+      uri,
+      {
+        httpMethod: "POST",
+        uploadType: FileSystem.FileSystemUploadType.BINARY_CONTENT,
+        headers: {
+          Authorization: `Bearer ${token}`,
+          apikey: anonKey,
+          "Content-Type": contentType,
+          "x-upsert": "true",
+        },
+      },
+    );
+    if (res.status < 200 || res.status >= 300) {
+      let msg = res.body;
+      try { msg = JSON.parse(res.body)?.message || res.body; } catch {}
+      throw new Error(`Could not upload your ${kind}: ${msg}`);
+    }
+    return supabase.storage.from("audio").getPublicUrl(path).data.publicUrl;
   };
 
   const handleAudioUpload = async () => {
@@ -1326,52 +1752,59 @@ export default function AIStudioScreen() {
     }
   };
 
+  /**
+   * Pick a video → Suno takes its soundtrack as the song reference
+   * (Generate API `videoUrls`: mp4/mov/webm, ≤ 241s, ≤ 100MB).
+   */
   const handleVideoPicker = async () => {
     try {
+      const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (!perm.granted) {
+        Alert.alert("Permission needed", "Allow access to your videos to upload one.");
+        return;
+      }
       const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Videos,
-        allowsEditing: true,
+        mediaTypes: ["videos"],
+        allowsEditing: true, // lets the user trim long videos (iOS)
+        videoMaxDuration: 241,
         quality: 1,
       });
+      if (result.canceled || !result.assets?.length) return;
 
-      if (!result.canceled && result.assets && result.assets.length > 0) {
-        const videoUri = result.assets[0].uri;
-        console.log("Selected video:", videoUri);
-
-        // Convert to audio using ffmpeg locally
-        const outputUri = videoUri.replace(/\.[^/.]+$/, "") + "_audio.mp3";
-
-        if (FFmpegKit && ReturnCode) {
-          console.log("Converting video to audio...", outputUri);
-          const session = await FFmpegKit.execute(
-            `-y -i ${videoUri} -q:a 0 -map a ${outputUri}`,
-          );
-          const returnCode = await session.getReturnCode();
-
-          if (ReturnCode.isSuccess(returnCode)) {
-            console.log("Successfully converted video to audio:", outputUri);
-            setSelectedAudioUri(outputUri);
-            setIsInputExpanded(false);
-            setIsAudioMenuOpen(false);
-            setTimeout(() => {
-              setIsAudioEditorOpen(true);
-            }, 400);
-          } else {
-            console.error("FFmpeg conversion failed");
-            Alert.alert("Error", "Could not extract audio from video.");
-          }
-        } else {
-          console.log(
-            "FFmpegKit not available, skipping conversion and proceeding with original video URI for now",
-          );
-          setSelectedAudioUri(videoUri);
-          setIsInputExpanded(false);
-          setIsAudioMenuOpen(false);
-          setTimeout(() => {
-            setIsAudioEditorOpen(true);
-          }, 400);
-        }
+      const asset = result.assets[0];
+      const durationSec = (asset.duration ?? 0) / 1000; // ms → s
+      if (durationSec > 241) {
+        Alert.alert(
+          "Video too long",
+          `Videos can be up to 4 minutes (241s). Yours is ${Math.round(durationSec)}s — trim it and try again.`,
+        );
+        return;
       }
+      let size = asset.fileSize ?? 0;
+      if (!size) {
+        const info = await FileSystem.getInfoAsync(asset.uri);
+        size = info.exists ? (info as any).size ?? 0 : 0;
+      }
+      if (size > 100 * 1024 * 1024) {
+        Alert.alert("Video too large", "Videos must be under 100 MB.");
+        return;
+      }
+      const ext = (asset.uri.split("?")[0].match(/\.([a-z0-9]+)$/i)?.[1] || "mp4").toLowerCase();
+      if (!["mp4", "mov", "webm", "m4v", "qt"].includes(ext)) {
+        Alert.alert("Unsupported format", "Please choose an MP4, MOV or WEBM video.");
+        return;
+      }
+
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      // Video replaces any audio source — one reference at a time
+      if (audioPlayer?.playing) audioPlayer.pause();
+      setSelectedAudioUri(null);
+      setAudioTitle("");
+      setSelectedVideo({
+        uri: asset.uri,
+        name: (asset.fileName || "My video").replace(/\.[^/.]+$/, ""),
+        mimeType: asset.mimeType || undefined,
+      });
     } catch (error) {
       console.error("Error picking video:", error);
       Alert.alert("Error", "Failed to pick video");
@@ -1380,68 +1813,44 @@ export default function AIStudioScreen() {
 
   const startRecording = async () => {
     try {
-      if (!AudioModule) {
-        setIsRecording(true);
-        setVolume(0);
-        return;
+      const permissionResponse = await requestRecordingPermissionsAsync();
+      if (permissionResponse.status !== 'granted') {
+         return;
       }
-      const permission = await AudioModule.requestPermissionsAsync();
-      if (permission.status !== "granted") return;
+      await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
 
-      await AudioModule.setAudioModeAsync({
-        allowsRecordingIOS: true,
-        playsInSilentModeIOS: true,
-      });
-
-      const { recording } = await AudioModule.Recording.createAsync(
-        {
-          ...AudioModule.RecordingOptionsPresets.HIGH_QUALITY,
-          isMeteringEnabled: true,
-        },
-        (status) => {
-          if (status.isRecording) {
-            setRecordingDurationMs(status.durationMillis);
-            
-            // Enforce max 60 seconds (Suno persona limit)
-            if (status.durationMillis >= 60000) {
-              stopRecording(true);
-              return;
-            }
-
-            const db = status.metering !== undefined ? status.metering : -160;
-            // Map -50dB to 0dB into 0 to 1 scale for visual volume
-            const val = (db + 50) / 50;
-            const newVol = Math.max(0, Math.min(1, val));
-            
-            setVolume(newVol);
-          }
-        },
-        30 // 30ms update interval for smoother 33fps animation
-      );
-      
-      setRecording(recording);
+      mainRecorder.record();
       setIsRecording(true);
       setVolume(0);
       setRecordingDurationMs(0);
+      
+      // We manually update duration for expo-audio if needed, but we rely on interval above for volume
+      let startTime = Date.now();
+      let durationInterval = setInterval(() => {
+         if (mainRecorder.isRecording) {
+            let dur = Date.now() - startTime;
+            setRecordingDurationMs(dur);
+            if (dur >= 60000) {
+               stopRecording(true);
+               clearInterval(durationInterval);
+            }
+         } else {
+            clearInterval(durationInterval);
+         }
+      }, 100);
+      
     } catch (err) {
       console.error("Failed to start recording", err);
     }
   };
 
   const stopRecording = async (submit: boolean) => {
-    if (!recording) {
-      setIsRecording(false);
-      if (submit) {
-        setSelectedAudioUri("mock-uri");
-        setIsAudioMenuOpen(false);
-        setTimeout(() => setIsAudioEditorOpen(true), 400);
-      }
-      return;
-    }
     try {
-      await recording.stopAndUnloadAsync();
-      const uri = recording.getURI();
-      setRecording(null);
+      if (mainRecorder.isRecording) {
+        await mainRecorder.stop();
+        await setAudioModeAsync({ allowsRecording: false, playsInSilentMode: true });
+      }
+      const uri = mainRecorder.uri;
       setIsRecording(false);
       setVolume(0);
 
@@ -1460,49 +1869,15 @@ export default function AIStudioScreen() {
 
   const handlePlayPause = async () => {
     try {
-      if (!AudioModule) {
-        Alert.alert("Audio error", "Audio module is undefined.");
+      if (!selectedAudioUri || !audioPlayer) {
         return;
       }
 
-      if (!selectedAudioUri) {
-        return;
-      }
-
-      if (sound) {
-        if (isPlaying) {
-          await sound.pauseAsync();
-          setIsPlaying(false);
-        } else {
-          await AudioModule.setAudioModeAsync({
-            allowsRecordingIOS: false,
-            playsInSilentModeIOS: true,
-            staysActiveInBackground: true,
-            playThroughEarpieceAndroid: false,
-            shouldDuckAndroid: true,
-          });
-          await sound.playAsync();
-          setIsPlaying(true);
-        }
+      if (isPlaying) {
+        audioPlayer.pause();
+        setIsPlaying(false);
       } else {
-        await AudioModule.setAudioModeAsync({
-          allowsRecordingIOS: false,
-          playsInSilentModeIOS: true,
-          staysActiveInBackground: true,
-          playThroughEarpieceAndroid: false,
-          shouldDuckAndroid: true,
-        });
-        const { sound: newSound } = await AudioModule.Sound.createAsync(
-          { uri: selectedAudioUri },
-          { shouldPlay: true },
-        );
-        newSound.setOnPlaybackStatusUpdate((status) => {
-          if (status.isLoaded && status.didJustFinish) {
-            setIsPlaying(false);
-            newSound.setPositionAsync(0);
-          }
-        });
-        setSound(newSound);
+        audioPlayer.play();
         setIsPlaying(true);
       }
     } catch (err) {
@@ -1511,12 +1886,35 @@ export default function AIStudioScreen() {
   };
 
   useEffect(() => {
-    return sound
-      ? () => {
-          sound.unloadAsync();
-        }
-      : undefined;
-  }, [sound]);
+    // Rely on audioPlayer hook for cleanup
+  }, [audioPlayer]);
+
+  // ── Voice picker opened from the Create composer ──
+  // Two sibling <Modal>s can't be shown at once (iOS refuses, Android stacks
+  // badly), so hide the composer, show the voice list, then bring it back.
+  const openVoicePicker = () => {
+    Haptics.selectionAsync().catch(() => {});
+    Keyboard.dismiss();
+    setIsPlusMenuOpen(false);
+    setIsAudioMenuOpen(false);
+    reopenComposerAfterVoiceRef.current = isInputExpanded;
+    if (isInputExpanded) {
+      setIsInputExpanded(false);
+      setTimeout(() => setIsPersonaModalOpen(true), 350);
+    } else {
+      setIsPersonaModalOpen(true);
+    }
+  };
+  const reopenComposerIfNeeded = () => {
+    if (reopenComposerAfterVoiceRef.current) {
+      reopenComposerAfterVoiceRef.current = false;
+      setTimeout(() => setIsInputExpanded(true), 350);
+    }
+  };
+  const closeVoicePicker = () => {
+    setIsPersonaModalOpen(false);
+    reopenComposerIfNeeded();
+  };
 
   return (
     <SafeAreaView
@@ -1569,17 +1967,7 @@ export default function AIStudioScreen() {
                         {
                           text: "Clear",
                           style: "destructive",
-                          onPress: () => {
-                            setPrompt("");
-                            setStylesText("");
-                            setSelectedAudioUri(null);
-                            setAudioTitle("");
-                            setLyricsHistory([""]);
-                            setLyricsHistoryIndex(0);
-                            setStylesHistory([""]);
-                            setStylesHistoryIndex(0);
-                            setSelectedPersonaId(null);
-                          },
+                          onPress: () => clearStudio(),
                         },
                       ],
                     );
@@ -1614,310 +2002,123 @@ export default function AIStudioScreen() {
                 {/* Top Chips Row */}
                 <View style={{ zIndex: 10 }}>
                   <View style={styles.chipsRow}>
-                    <TouchableOpacity
-                      style={[
-                        styles.iconChip,
-                        isPlusMenuOpen && {
-                          backgroundColor: "rgba(255,255,255,0.15)",
-                        },
-                      ]}
-                      onPress={() => setIsPlusMenuOpen(!isPlusMenuOpen)}
-                    >
-                      <Ionicons name="add" size={18} color="#FFF" />
-                    </TouchableOpacity>
-                    
-                    {/* ── Voice Persona Selector Chip ── */}
-                    {personas.length > 0 && (
-                      <TouchableOpacity
-                        style={[
-                          styles.chip,
-                          selectedPersonaId && {
-                            backgroundColor: "rgba(130, 80, 255, 0.35)",
-                            borderColor: "#8250FF",
-                            borderWidth: 1.5,
-                            shadowColor: "#8250FF",
-                            shadowOffset: { width: 0, height: 0 },
-                            shadowOpacity: 0.9,
-                            shadowRadius: 12,
-                            elevation: 10,
-                          },
-                        ]}
-                        onPress={() => setIsPersonaModalOpen(true)}
-                      >
-                        <Ionicons
-                          name="mic-outline"
-                          size={15}
-                          color={selectedPersonaId ? "#C8A8FF" : "rgba(255,255,255,0.7)"}
-                          style={{ marginRight: 5 }}
-                        />
-                        <Text
-                          style={[
-                            styles.chipText,
-                            selectedPersonaId && { color: "#C8A8FF" },
-                          ]}
-                          numberOfLines={1}
-                        >
-                          {selectedPersonaId
-                            ? (personas.find((p: any) => p.id === selectedPersonaId)?.name ?? "Voice")
-                            : "Voice"}
-                        </Text>
-                        {selectedPersonaId && (
-                          <TouchableOpacity
-                            onPress={() => setSelectedPersonaId(null)}
-                            style={{ marginLeft: 5 }}
-                            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                          >
-                            <Ionicons
-                              name="close"
-                              size={13}
-                              color="rgba(200,168,255,0.7)"
-                            />
-                          </TouchableOpacity>
-                        )}
-                      </TouchableOpacity>
-                    )}
-
-                    <TouchableOpacity
-                      style={[
-                        styles.chip,
-                        hasAudio && {
-                          backgroundColor: "rgba(255,255,255,0.1)",
-                          borderColor: "rgba(255,255,255,0.15)",
-                          paddingLeft: 6,
-                          paddingRight: 10,
-                          paddingVertical: 6,
-                        },
-                        !hasAudio && isAudioMenuOpen && {
-                          backgroundColor: "rgba(255,255,255,0.15)",
-                        },
-                      ]}
+                    <PlusChip
+                      active={isPlusMenuOpen}
                       onPress={() => {
-                        if (!hasAudio) {
-                          setIsAudioMenuOpen(!isAudioMenuOpen);
-                        } else {
-                          // Tap on the pill text could open the editor or play, but we'll leave it as play
-                          handlePlayPause();
-                        }
+                        setIsPlusMenuOpen(!isPlusMenuOpen);
+                        setIsAudioMenuOpen(false);
                       }}
-                    >
-                      {hasAudio ? (
-                        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                          <TouchableOpacity 
-                            style={{ 
-                              width: 24, 
-                              height: 24, 
-                              borderRadius: 12, 
-                              backgroundColor: 'rgba(255,255,255,0.2)',
-                              justifyContent: 'center',
-                              alignItems: 'center',
-                              marginRight: 8,
-                              overflow: 'hidden'
-                            }}
-                            onPress={handlePlayPause}
-                          >
-                            <Image 
-                              source={{ uri: 'https://images.unsplash.com/photo-1514525253161-7a46d19cd819?q=80&w=100&auto=format&fit=crop' }} 
-                              style={{ width: '100%', height: '100%', position: 'absolute' }} 
-                            />
-                            <View style={{ width: '100%', height: '100%', position: 'absolute', backgroundColor: 'rgba(0,0,0,0.4)' }} />
-                            <Ionicons name={isPlaying ? "pause" : "play"} size={14} color="#FFF" style={{ marginLeft: isPlaying ? 0 : 2 }} />
-                          </TouchableOpacity>
-                          <Text style={[styles.chipText, { color: "#FFF", fontSize: 13 }]} numberOfLines={1}>
-                            {audioTitle || "Remix Audio"}
-                          </Text>
-                          <TouchableOpacity
-                            onPress={(e) => {
-                              e.stopPropagation();
-                              setSelectedAudioUri(null);
-                              setAudioTitle("");
-                              if (sound) sound.unloadAsync();
-                            }}
-                            style={{ marginLeft: 8, padding: 2 }}
-                          >
-                            <Ionicons
-                              name="close"
-                              size={16}
-                              color="rgba(255,255,255,0.5)"
-                            />
-                          </TouchableOpacity>
-                        </View>
-                      ) : (
-                        <>
-                          <Ionicons
-                            name="musical-notes-outline"
-                            size={16}
-                            color="rgba(255,255,255,0.8)"
-                            style={{ marginRight: 6 }}
-                          />
-                          <Text style={styles.chipText}>Audio</Text>
-                        </>
-                      )}
-                    </TouchableOpacity>
-                    
-                    <TouchableOpacity
-                      style={[
-                        styles.chip,
-                        stylesText.trim().length > 0 && {
-                          backgroundColor: "rgba(255,255,255,0.1)",
-                          borderColor: "rgba(255,255,255,0.15)",
-                        },
-                      ]}
-                      onPress={() => setIsStylesMenuOpen(true)}
-                    >
-                      {stylesText.trim().length > 0 ? (
-                        <View style={{ width: 20, height: 20, borderRadius: 10, backgroundColor: "#3b82f6", justifyContent: "center", alignItems: "center", marginRight: 6 }}>
-                          <Ionicons name="musical-note" size={12} color="#FFF" />
-                        </View>
-                      ) : (
-                        <Ionicons
-                          name="color-palette-outline"
-                          size={16}
-                          color="rgba(255,255,255,0.8)"
-                          style={{ marginRight: 6 }}
-                        />
-                      )}
-                      <Text
-                        style={[
-                          styles.chipText,
-                          stylesText.trim().length > 0 && { color: "#FFF" },
-                        ]}
-                      >
-                        Styles
-                      </Text>
-                      {stylesText.trim().length > 0 && (
-                        <TouchableOpacity
-                          onPress={(e) => {
-                            e.stopPropagation();
-                            setStylesText("");
-                          }}
-                          style={{ marginLeft: 6 }}
-                        >
-                          <Ionicons
-                            name="close"
-                            size={14}
-                            color="rgba(255,255,255,0.5)"
-                          />
-                        </TouchableOpacity>
-                      )}
-                    </TouchableOpacity>
+                    />
 
-                    <TouchableOpacity
-                      style={[
-                        styles.chip,
-                        lyricsText.trim().length > 0 && {
-                          backgroundColor: "rgba(255,255,255,0.1)",
-                          borderColor: "rgba(255,255,255,0.15)",
-                        },
-                      ]}
-                      onPress={() => setIsLyricsMenuOpen(true)}
-                    >
-                      {lyricsText.trim().length > 0 && (
-                        <Ionicons
-                          name="list-outline"
-                          size={16}
-                          color="#10b981"
-                          style={{ marginRight: 6 }}
+                    {selectedVideo ? (
+                      <SourcePreviewChip
+                        key={selectedVideo.uri}
+                        testID="create-chip-video"
+                        uri={selectedVideo.uri}
+                        label={selectedVideo.name}
+                        kind="video"
+                        accentColor="#F09819"
+                        onClear={() => setSelectedVideo(null)}
+                      />
+                    ) : !hasAudio ? (
+                      <DashedChip
+                        testID="create-chip-audio"
+                        label="Audio"
+                        icon={<AudioWaveIcon />}
+                        active={isAudioMenuOpen}
+                        onPress={() => {
+                          setIsAudioMenuOpen(!isAudioMenuOpen);
+                          setIsPlusMenuOpen(false);
+                        }}
+                      />
+                    ) : (
+                      <SourcePreviewChip
+                        key={selectedAudioUri!}
+                        testID="create-chip-audio-preview"
+                        uri={selectedAudioUri!}
+                        label={audioTitle || "My audio"}
+                        kind="audio"
+                        accentColor="#34D399"
+                        onWillPlay={() => {
+                          if (audioPlayer?.playing) audioPlayer.pause();
+                          setIsPlaying(false);
+                        }}
+                        onClear={() => {
+                          if (audioPlayer?.playing) audioPlayer.pause();
+                          setIsPlaying(false);
+                          setSelectedAudioUri(null);
+                          setAudioTitle("");
+                        }}
+                      />
+                    )}
+                    
+                    <DashedChip
+                      testID="create-chip-lyrics"
+                      label="Lyrics"
+                      icon={
+                        <LyricsIcon
+                          color={lyricsText.trim().length > 0 ? "#34D399" : "rgba(255,255,255,0.85)"}
                         />
-                      )}
-                      <Text
-                        style={[
-                          styles.chipText,
-                          lyricsText.trim().length > 0 && { color: "#FFF" },
-                        ]}
-                      >
-                        Lyrics
-                      </Text>
-                      {lyricsText.trim().length > 0 && (
-                        <TouchableOpacity
-                          onPress={(e) => {
-                            e.stopPropagation();
-                            setLyricsText("");
-                          }}
-                          style={{ marginLeft: 6 }}
-                        >
-                          <Ionicons
-                            name="close"
-                            size={14}
-                            color="rgba(255,255,255,0.5)"
-                          />
-                        </TouchableOpacity>
-                      )}
-                    </TouchableOpacity>
+                      }
+                      active={lyricsText.trim().length > 0}
+                      onPress={() => setIsLyricsMenuOpen(true)}
+                      onClear={() => setLyricsText("")}
+                    />
+
+                    <DashedChip
+                      testID="create-chip-styles"
+                      label="Styles"
+                      icon={
+                        <StylesIcon
+                          color={stylesText.trim().length > 0 ? "#60A5FA" : "rgba(255,255,255,0.85)"}
+                        />
+                      }
+                      active={stylesText.trim().length > 0}
+                      onPress={() => setIsStylesMenuOpen(true)}
+                      onClear={() => setStylesText("")}
+                    />
+
+                    {/* ── Voice: sing the song in the user's own cloned voice ── */}
+                    <DashedChip
+                      testID="create-chip-voice"
+                      label={
+                        selectedPersonaId
+                          ? (personas.find((p: any) => p.id === selectedPersonaId)?.name ?? "Voice")
+                          : "Voice"
+                      }
+                      icon={
+                        <VoiceFaceIcon
+                          color={selectedPersonaId ? "#C8A8FF" : "rgba(255,255,255,0.85)"}
+                        />
+                      }
+                      accentColor="#8250FF"
+                      active={!!selectedPersonaId}
+                      onPress={openVoicePicker}
+                      onClear={() => setSelectedPersonaId(null)}
+                    />
                   </View>
                   {isPlusMenuOpen && (
                     <View style={styles.plusMenuPopover}>
                       <TouchableOpacity
-                        style={styles.plusMenuItem}
-                        onPress={() => {
-                          setIsPlusMenuOpen(false);
-                          setIsInputExpanded(false);
-                          setIsPersonaModalOpen(true);
-                        }}
-                      >
-                        <Ionicons
-                          name="person-outline"
-                          size={20}
-                          color="rgba(255,255,255,0.9)"
-                        />
-                        <Text style={styles.plusMenuItemText}>
-                          Voice (Sauti Zako)
-                        </Text>
-                      </TouchableOpacity>
-                      <TouchableOpacity
-                        style={styles.plusMenuItem}
-                        onPress={() => {
-                          setIsPlusMenuOpen(false);
-                          setIsAudioMenuOpen(true);
-                        }}
-                      >
-                        <Ionicons
-                          name="pulse-outline"
-                          size={20}
-                          color="rgba(255,255,255,0.9)"
-                        />
-                        <Text style={styles.plusMenuItemText}>Audio</Text>
-                        <Ionicons
-                          name="chevron-forward"
-                          size={16}
-                          color="rgba(255,255,255,0.4)"
-                          style={{ marginLeft: "auto" }}
-                        />
-                      </TouchableOpacity>
-                      <TouchableOpacity style={styles.plusMenuItem}>
-                        <Ionicons
-                          name="image-outline"
-                          size={20}
-                          color="rgba(255,255,255,0.9)"
-                        />
-                        <Text style={styles.plusMenuItemText}>Image</Text>
-                      </TouchableOpacity>
-                      <TouchableOpacity
+                        testID="plus-menu-upload-video"
                         style={styles.plusMenuItem}
                         onPress={() => {
                           setIsPlusMenuOpen(false);
                           handleVideoPicker();
                         }}
                       >
-                        <Ionicons
-                          name="film-outline"
-                          size={20}
-                          color="rgba(255,255,255,0.9)"
-                        />
-                        <Text style={styles.plusMenuItemText}>Video</Text>
-                      </TouchableOpacity>
-                      <TouchableOpacity
-                        style={styles.plusMenuItem}
-                        onPress={() => {
-                          setIsPlusMenuOpen(false);
-                          setIsAdvancedMenuOpen(true);
-                        }}
-                      >
-                        <Ionicons
-                          name="options-outline"
-                          size={20}
-                          color="rgba(255,255,255,0.9)"
-                        />
-                        <Text style={styles.plusMenuItemText}>Advanced</Text>
+                        <VideoIcon size={20} color="rgba(255,255,255,0.9)" />
+                        <View style={{ flex: 1 }}>
+                          <Text style={styles.plusMenuItemText}>Upload Video</Text>
+                          <Text
+                            style={[
+                              styles.plusMenuItemText,
+                              { fontSize: 11, opacity: 0.5, marginTop: 2 },
+                            ]}
+                          >
+                            We use its sound to create your song
+                          </Text>
+                        </View>
                       </TouchableOpacity>
                     </View>
                   )}
@@ -2011,10 +2212,10 @@ export default function AIStudioScreen() {
                     <TouchableOpacity
                       style={[
                         styles.expandedSendButton,
-                        !prompt.trim() && { opacity: 0.5 },
+                        !prompt.trim() && !lyricsText.trim() && !hasSource && { opacity: 0.5 },
                       ]}
                       onPress={handleGenerate}
-                      disabled={!prompt.trim()}
+                      disabled={!prompt.trim() && !lyricsText.trim() && !hasSource}
                     >
                       <LinearGradient
                         colors={["#FF512F", "#F09819"]}
@@ -2179,16 +2380,33 @@ export default function AIStudioScreen() {
                         onPress={handleScanLyrics}
                         disabled={isScanningLyrics}
                       >
-                        <Ionicons
-                          name="camera-outline"
-                          size={20}
-                          color={
-                            isScanningLyrics
-                              ? "rgba(255,255,255,0.3)"
-                              : "#10b981"
-                          }
-                        />
+                        {isScanningLyrics ? (
+                          <ActivityIndicator size="small" color="#10b981" />
+                        ) : (
+                          <Ionicons
+                            name="camera-outline"
+                            size={20}
+                            color="#10b981"
+                          />
+                        )}
                       </TouchableOpacity>
+                      {hasSource && (
+                        <TouchableOpacity
+                          style={styles.lyricsToolIcon}
+                          onPress={handleExtractLyricsFromMedia}
+                          disabled={isExtractingAudioLyrics}
+                        >
+                          {isExtractingAudioLyrics ? (
+                            <ActivityIndicator size="small" color="#8250FF" />
+                          ) : (
+                            <Ionicons
+                              name="musical-notes-outline"
+                              size={20}
+                              color="#8250FF"
+                            />
+                          )}
+                        </TouchableOpacity>
+                      )}
                       <TouchableOpacity
                         style={styles.lyricsToolIcon}
                         onPress={handleGenerateLyrics}
@@ -2598,7 +2816,71 @@ export default function AIStudioScreen() {
             />
           }
         >
-          {tasks.map((task) => {
+          {tasks.flatMap((task) => {
+            // If the task is successful and has tracks, render a card for each track.
+            if (task.status === "SUCCESS" && task.tracks && task.tracks.length > 0) {
+              return task.tracks.map((track, trackIndex) => {
+                const singleTrackTask = { ...task, tracks: [track] };
+                return (
+                  <TouchableOpacity
+                    key={`${task.taskId}-${track.id || trackIndex}`}
+                    style={styles.taskItem}
+                    onPress={() => {
+                      if (track && track.audioUrl) {
+                        playTrack({
+                          id: track.id || task.taskId,
+                          title: track.title || task.title || "Untitled",
+                          audio_url: track.audioUrl,
+                          cover_url: track.imageUrl || "https://picsum.photos/100",
+                          duration_sec: track.duration || 0,
+                          is_ai: true,
+                          user_id: session?.user?.id,
+                          artist_name: profile?.username || "BongoBox Creator",
+                          lyrics: (track as any).lyrics || (track as any).prompt,
+                          genre: (track as any).genre,
+                        } as any);
+                      }
+                    }}
+                  >
+                    <View style={styles.taskImageContainer}>
+                      <Image
+                        source={{ uri: track?.imageUrl || "https://picsum.photos/100" }}
+                        style={styles.taskImage}
+                      />
+                      {track?.duration ? (
+                        <View style={styles.taskDuration}>
+                          <Text style={styles.taskDurationText}>
+                            {`${Math.floor(track.duration / 60)}:${Math.floor(track.duration % 60).toString().padStart(2, "0")}`}
+                          </Text>
+                        </View>
+                      ) : null}
+                    </View>
+                    <View style={styles.taskInfo}>
+                      <View style={styles.taskTitleRow}>
+                        <Text style={[styles.taskTitle, { color: COLORS.textPrimary }]} numberOfLines={1}>
+                          {track.title || task.title || "Untitled Song"}
+                        </Text>
+                        <Text style={styles.taskVersionTag}>V6-DAPAZ</Text>
+                      </View>
+                      <Text style={styles.taskSubtitle} numberOfLines={2}>
+                        {track.prompt || track.genre || "AI Generated"}
+                      </Text>
+                    </View>
+                    <TouchableOpacity
+                      style={styles.moreButton}
+                      onPress={() => {
+                        setSelectedSongTask(singleTrackTask);
+                        setIsSongOptionsOpen(true);
+                      }}
+                    >
+                      <Ionicons name="ellipsis-horizontal" size={20} color={COLORS.textSecondary} />
+                    </TouchableOpacity>
+                  </TouchableOpacity>
+                );
+              });
+            }
+
+            // Otherwise, render a single card for the generating/processing state.
             const track = task.tracks?.[0];
             return (
               <TouchableOpacity
@@ -2612,57 +2894,41 @@ export default function AIStudioScreen() {
                       audio_url: track.audioUrl,
                       cover_url: track.imageUrl || "https://picsum.photos/100",
                       duration_sec: track.duration || 0,
-                    });
+                      is_ai: true,
+                      user_id: session?.user?.id,
+                      artist_name: profile?.username || "BongoBox Creator",
+                      lyrics: (track as any).lyrics || (track as any).prompt,
+                      genre: (track as any).genre,
+                    } as any);
                   }
                 }}
               >
-                {/* Optional pink dot indicator */}
-                <View style={styles.taskDot} />
 
                 <View style={styles.taskImageContainer}>
-                  {task.status === "GENERATE" ? (
-                    <View
-                      style={[
-                        styles.taskImage,
-                        {
-                          justifyContent: "center",
-                          alignItems: "center",
-                          backgroundColor: "#333",
-                        },
-                      ]}
-                    >
+                  {task.status === "PENDING" || task.status === "GENERATE" || task.status === "PROCESSING" ? (
+                    <View style={[styles.taskImage, { justifyContent: "center", alignItems: "center", backgroundColor: "#222" }]}>
                       <ActivityIndicator color={COLORS.gold} />
                     </View>
                   ) : (
-                    <Image
-                      source={{
-                        uri: track?.imageUrl || "https://picsum.photos/100",
-                      }}
-                      style={styles.taskImage}
-                    />
+                    <Image source={{ uri: track?.imageUrl || "https://picsum.photos/100" }} style={styles.taskImage} />
                   )}
-                  <View style={styles.taskDuration}>
-                    <Text style={styles.taskDurationText}>
-                      {track?.duration
-                        ? `${Math.floor(track.duration / 60)}:${(track.duration % 60).toString().padStart(2, "0")}`
-                        : "0:48"}
-                    </Text>
-                  </View>
+                  {task.status !== "PENDING" && task.status !== "GENERATE" && task.status !== "PROCESSING" && track?.duration ? (
+                    <View style={styles.taskDuration}>
+                      <Text style={styles.taskDurationText}>
+                        {`${Math.floor(track.duration / 60)}:${Math.floor(track.duration % 60).toString().padStart(2, "0")}`}
+                      </Text>
+                    </View>
+                  ) : null}
                 </View>
                 <View style={styles.taskInfo}>
                   <View style={styles.taskTitleRow}>
-                    <Text
-                      style={[styles.taskTitle, { color: COLORS.textPrimary }]}
-                      numberOfLines={1}
-                    >
-                      {task.status === "GENERATE"
-                        ? "Generating..."
-                        : task.title || "Untitled Song"}
+                    <Text style={[styles.taskTitle, { color: COLORS.textPrimary }]} numberOfLines={1}>
+                      {task.status === "PENDING" || task.status === "GENERATE" || task.status === "PROCESSING" ? "Generating song..." : task.title || "Untitled Song"}
                     </Text>
                     <Text style={styles.taskVersionTag}>V6-DAPAZ</Text>
                   </View>
                   <Text style={styles.taskSubtitle} numberOfLines={2}>
-                    1 {track?.prompt || "electronic"}
+                    {task.status === "PENDING" || task.status === "GENERATE" || task.status === "PROCESSING" ? "Hang tight, the AI is composing your track..." : track?.prompt || track?.genre || "AI Generated"}
                   </Text>
                 </View>
                 <TouchableOpacity
@@ -2672,11 +2938,7 @@ export default function AIStudioScreen() {
                     setIsSongOptionsOpen(true);
                   }}
                 >
-                  <Ionicons
-                    name="ellipsis-horizontal"
-                    size={20}
-                    color={COLORS.textSecondary}
-                  />
+                  <Ionicons name="ellipsis-horizontal" size={20} color={COLORS.textSecondary} />
                 </TouchableOpacity>
               </TouchableOpacity>
             );
@@ -2707,12 +2969,60 @@ export default function AIStudioScreen() {
             <Text style={{ color: "white" }}>Audio Error: {audioError}</Text>
           </View>
         )}
-        <View style={styles.inputWrapper}>
-          <BlurView
-            intensity={80}
-            tint="dark"
-            style={StyleSheet.absoluteFill}
-          />
+        {currentTrack ? (
+          <View style={styles.inputWrapper}>
+            <BlurView intensity={80} tint="dark" style={StyleSheet.absoluteFill} />
+            {Platform.OS === "android" && (
+              <LinearGradient colors={["rgba(30, 30, 30, 0.95)", "rgba(20, 20, 20, 0.98)"]} style={StyleSheet.absoluteFill} />
+            )}
+            <View style={[styles.inputContainer, { alignItems: 'center', paddingVertical: 8 }]}>
+              <TouchableOpacity 
+                style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }} 
+                onPress={() => {
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                  router.push("/player");
+                }}
+              >
+                <Animated.Image 
+                  source={{ uri: currentTrack.cover_url || "https://picsum.photos/100" }} 
+                  style={{ 
+                    width: 40, 
+                    height: 40, 
+                    borderRadius: 20, 
+                    marginRight: 12,
+                    transform: [{ rotate: spin }] 
+                  }} 
+                />
+                <View style={{ flex: 1, justifyContent: 'center' }}>
+                  <Text style={{ color: COLORS.textPrimary, fontWeight: '600', fontSize: 16 }} numberOfLines={1}>
+                    {currentTrack.title}
+                  </Text>
+                  <Text style={{ color: COLORS.textSecondary, fontSize: 12, marginTop: 2 }} numberOfLines={1}>
+                    {currentTrack.artist_name || 'V6-DAPAZ'}
+                  </Text>
+                </View>
+              </TouchableOpacity>
+              <TouchableOpacity onPress={() => {
+                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+                togglePlayPause();
+              }} style={[styles.micButton, { marginRight: 8, padding: 8 }]}>
+                <Ionicons name={isPlayingGlobal ? "pause" : "play"} size={24} color={COLORS.textPrimary} />
+              </TouchableOpacity>
+              <TouchableOpacity onPress={() => {
+                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                closePlayer();
+              }} style={[styles.micButton, { padding: 8 }]}>
+                <Ionicons name="close" size={24} color={COLORS.textSecondary} />
+              </TouchableOpacity>
+            </View>
+          </View>
+        ) : (
+          <View style={styles.inputWrapper}>
+            <BlurView
+              intensity={80}
+              tint="dark"
+              style={StyleSheet.absoluteFill}
+            />
           {Platform.OS === "android" && (
             <LinearGradient
               colors={["rgba(30, 30, 30, 0.95)", "rgba(20, 20, 20, 0.98)"]}
@@ -2749,12 +3059,12 @@ export default function AIStudioScreen() {
                 placeholderTextColor="transparent"
                 value={prompt}
                 onChangeText={setPrompt}
-                multiline={false}
+                multiline={true}
                 editable={false}
                 pointerEvents="none"
               />
             </TouchableOpacity>
-            {prompt || stylesText || selectedAudioUri ? (
+            {prompt || stylesText || hasSource ? (
               <TouchableOpacity
                 style={[styles.micButton, { marginRight: 4 }]}
                 onPress={() => {
@@ -2770,6 +3080,7 @@ export default function AIStudioScreen() {
                           setPrompt("");
                           setStylesText("");
                           setSelectedAudioUri(null);
+                          setSelectedVideo(null);
                           setAudioTitle("");
                         },
                       },
@@ -2795,9 +3106,9 @@ export default function AIStudioScreen() {
               />
             </TouchableOpacity>
             <TouchableOpacity
-              style={[styles.sendButton, !prompt.trim() && { opacity: 0.8 }]}
+              style={[styles.sendButton, !prompt.trim() && !lyricsText.trim() && !hasSource && { opacity: 0.8 }]}
               onPress={handleGenerate}
-              disabled={!prompt.trim()}
+              disabled={!prompt.trim() && !lyricsText.trim() && !hasSource}
             >
               <LinearGradient
                 colors={["#FF512F", "#F09819"]}
@@ -2807,6 +3118,7 @@ export default function AIStudioScreen() {
             </TouchableOpacity>
           </View>
         </View>
+        )}
       </View>
 
       <Modal
@@ -3126,7 +3438,7 @@ export default function AIStudioScreen() {
                       onPress={() =>
                         Alert.alert(
                           "Song Info",
-                          `Duration: ${modalSongDuration ? `${Math.floor(modalSongDuration / 60)}:${(modalSongDuration % 60).toString().padStart(2, "0")}` : "Unknown"}
+                          `Duration: ${modalSongDuration ? `${Math.floor(modalSongDuration / 60)}:${Math.floor(modalSongDuration % 60).toString().padStart(2, "0")}` : "Unknown"}
 Status: ${selectedSongTask?.status || "Unknown"}`,
                         )
                       }
@@ -3166,12 +3478,27 @@ Status: ${selectedSongTask?.status || "Unknown"}`,
                     </TouchableOpacity>
                     <TouchableOpacity
                       style={styles.gridBtn}
-                      onPress={() => {
+                      onPress={async () => {
                         setIsSongOptionsOpen(false);
-                        if (modalSongAudioUrl) {
-                          Share.share({
-                            message: `Check out my AI song '${modalSongTitle}': ${modalSongAudioUrl}`,
-                          });
+                        if (modalSongAudioUrl && !modalSongAudioUrl.startsWith("mock")) {
+                          try {
+                            const fileName = `${modalSongTitle.replace(/[^a-zA-Z0-9 _-]/g, "")}.mp3`;
+                            const fileUri = FileSystem.documentDirectory + fileName;
+                            Alert.alert("Preparing...", "Downloading your file for share/download...");
+                            
+                            const downloadResult = await FileSystem.downloadAsync(modalSongAudioUrl, fileUri);
+                            if (downloadResult.status === 200) {
+                              await Sharing.shareAsync(downloadResult.uri, {
+                                mimeType: 'audio/mpeg',
+                                dialogTitle: 'Save or Share your AI Song',
+                                UTI: 'public.audio'
+                              });
+                            } else {
+                              Alert.alert("Error", "Could not download the audio file.");
+                            }
+                          } catch (error: any) {
+                            Alert.alert("Error", error.message || "Failed to share file");
+                          }
                         } else {
                           Alert.alert(
                             "Not Ready",
@@ -3349,10 +3676,59 @@ Status: ${selectedSongTask?.status || "Unknown"}`,
                             borderBottomColor: "rgba(255,255,255,0.05)",
                           },
                         ]}
-                        onPress={() => {
+                        onPress={async () => {
                           setIsSongOptionsOpen(false);
-                          setPrompt(modalSongPrompt || "");
-                          setStylesText(modalSongTags || "");
+                          const stripLrc = (txt: string) =>
+                            (txt || "")
+                              .split("\n")
+                              .map((l: string) => l.replace(/^\s*(\[\d{1,2}:\d{2}(?:\.\d{1,3})?\]\s*)+/, ""))
+                              .join("\n")
+                              .trim();
+
+                          // 1. Lyrics we already have locally
+                          let rawLyrics: string = selectedTrack?.lyrics || "";
+                          let styles_: string = modalSongTags || "";
+
+                          // 2. Missing? Look the song up in Supabase (by id, then by audio URL)
+                          if (!rawLyrics.trim()) {
+                            try {
+                              let row: any = null;
+                              if (selectedTrack?.id) {
+                                const { data } = await supabase
+                                  .from("tracks")
+                                  .select("lyrics, genre")
+                                  .eq("id", selectedTrack.id)
+                                  .maybeSingle();
+                                row = data;
+                              }
+                              if (!row?.lyrics && selectedTrack?.audioUrl) {
+                                const { data } = await supabase
+                                  .from("tracks")
+                                  .select("lyrics, genre")
+                                  .eq("audio_url", selectedTrack.audioUrl)
+                                  .maybeSingle();
+                                row = data || row;
+                              }
+                              if (row?.lyrics) rawLyrics = row.lyrics;
+                              if (!styles_ && row?.genre) styles_ = row.genre;
+                            } catch (e) {
+                              console.log("Reuse lyrics lookup failed:", e);
+                            }
+                          }
+
+                          const cleanLyrics = stripLrc(rawLyrics);
+                          const originalPrompt = selectedTrack?.prompt || "";
+                          setLyricsText(cleanLyrics);
+                          // Place the lyrics in the prompt so the user can easily see and edit them.
+                          setPrompt(cleanLyrics || originalPrompt || "");
+                          setStylesText(styles_ === "AI Generated" ? "" : styles_);
+
+                          if (!cleanLyrics && !originalPrompt) {
+                            Alert.alert(
+                              "No lyrics saved",
+                              "This song was saved without lyrics (older songs or instrumentals). Only the style was reused.",
+                            );
+                          }
                           setIsInputExpanded(true);
                           scrollViewRef.current?.scrollTo({
                             y: 0,
@@ -3570,7 +3946,7 @@ Status: ${selectedSongTask?.status || "Unknown"}`,
                     style={styles.publishBtn}
                     onPress={() => {
                       setIsSongOptionsOpen(false);
-                      Alert.alert("Publish", "Publishing to global feed...");
+                      setIsPublishSongModalOpen(true);
                     }}
                   >
                     <Ionicons name="globe-outline" size={20} color="#000" />
@@ -3600,6 +3976,12 @@ Status: ${selectedSongTask?.status || "Unknown"}`,
         }}
       />
 
+      <PublishSongModal
+        visible={isPublishSongModalOpen}
+        onClose={() => setIsPublishSongModalOpen(false)}
+        songTask={selectedSongTask}
+      />
+
       <ExtendSongModal
         visible={isExtendModalOpen}
         onClose={() => setIsExtendModalOpen(false)}
@@ -3611,7 +3993,7 @@ Status: ${selectedSongTask?.status || "Unknown"}`,
         visible={isPersonaModalOpen}
         animationType="slide"
         presentationStyle={Platform.OS === 'ios' ? 'pageSheet' : 'fullScreen'}
-        onRequestClose={() => setIsPersonaModalOpen(false)}
+        onRequestClose={closeVoicePicker}
       >
         <View style={{ flex: 1, backgroundColor: "#111", paddingTop: 20 }}>
           {/* Handle */}
@@ -3621,7 +4003,7 @@ Status: ${selectedSongTask?.status || "Unknown"}`,
 
           {/* Header */}
           <View style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: 20, marginBottom: 24 }}>
-            <TouchableOpacity onPress={() => setIsPersonaModalOpen(false)} style={{ padding: 4, marginRight: 12 }}>
+            <TouchableOpacity onPress={closeVoicePicker} style={{ padding: 4, marginRight: 12 }}>
               <Ionicons name="close" size={24} color="rgba(255,255,255,0.7)" />
             </TouchableOpacity>
             <Text style={{ color: "#FFF", fontSize: 20, fontWeight: "700", flex: 1 }}>My Voices</Text>
@@ -3681,7 +4063,7 @@ Status: ${selectedSongTask?.status || "Unknown"}`,
                     activeOpacity={0.75}
                     onPress={() => {
                       setSelectedPersonaId(isSelected ? null : p.id);
-                      setIsPersonaModalOpen(false);
+                      closeVoicePicker();
                     }}
                     style={{
                       marginBottom: 16,
@@ -3702,6 +4084,9 @@ Status: ${selectedSongTask?.status || "Unknown"}`,
                       </LinearGradient>
                       <View style={{ flex: 1 }}>
                         <Text style={{ color: isSelected ? "#C8A8FF" : "#FFF", fontSize: 16, fontWeight: "600" }}>{p.name}</Text>
+                        <Text style={{ color: p.type === "voice" ? "#FF7AA8" : "rgba(255,255,255,0.45)", fontSize: 11, fontWeight: "700", marginTop: 2, letterSpacing: 0.4 }}>
+                          {p.type === "voice" ? "YOUR VOICE • sings your songs" : "STYLE PERSONA"}
+                        </Text>
                         {p.description
                           ? <Text style={{ color: "rgba(255,255,255,0.5)", fontSize: 13, marginTop: 2 }} numberOfLines={1}>{p.description}</Text>
                           : null}
@@ -3732,7 +4117,8 @@ Status: ${selectedSongTask?.status || "Unknown"}`,
                       </TouchableOpacity>
                     </View>
 
-                    {/* Bottom row: Test / Play verification */}
+                    {/* Bottom row: Test / Play verification (cloned voices only) */}
+                    {p.type === "voice" && (
                     <View style={{ marginTop: 12, flexDirection: "row", alignItems: "center", gap: 10 }}>
                       {isTesting ? (
                         /* Generating test audio */
@@ -3792,10 +4178,11 @@ Status: ${selectedSongTask?.status || "Unknown"}`,
                           }}
                         >
                           <Ionicons name="ear-outline" size={18} color="rgba(255,255,255,0.6)" />
-                          <Text style={{ color: "rgba(255,255,255,0.6)", fontSize: 13, fontWeight: "600" }}>Verify My Voice</Text>
+                          <Text style={{ color: "rgba(255,255,255,0.6)", fontSize: 13, fontWeight: "600" }}>Hear a Sample Song</Text>
                         </TouchableOpacity>
                       )}
                     </View>
+                    )}
                   </TouchableOpacity>
                 );
               })
@@ -3813,36 +4200,38 @@ Status: ${selectedSongTask?.status || "Unknown"}`,
         onRequestClose={() => {
           if (isWizardRecording) stopWizardRecording(false);
           setIsVoiceWizardOpen(false);
+          reopenComposerIfNeeded();
         }}
       >
-        <View style={{ flex: 1, backgroundColor: "#000", overflow: "hidden" }}>
+        <View style={{ flex: 1, backgroundColor: "#0A0A0E", overflow: "hidden" }}>
           <LinearGradient
-            colors={["#0F0C29", "#302B63", "#24243E"]}
-            style={StyleSheet.absoluteFillObject}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 1, y: 1 }}
+            colors={["#2A0E24", "#140A1A", "#0A0A0E"]}
+            locations={[0, 0.45, 1]}
+            style={StyleSheet.absoluteFill}
           />
+          <View pointerEvents="none" style={wz.glowBlob} />
 
           {/* Header */}
-          <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 20, paddingTop: (insets.top || 0) + 16, paddingBottom: 16 }}>
+          <View style={[wz.header, { paddingTop: (insets.top || 0) + 12 }]}>
             <TouchableOpacity
-              style={{ width: 40, height: 40, borderRadius: 20, backgroundColor: "rgba(255,255,255,0.1)", justifyContent: "center", alignItems: "center" }}
+              style={wz.iconBtn}
               onPress={() => {
                 if (isWizardRecording) stopWizardRecording(false);
                 stopWizardPreview();
                 if (voiceWizardStep > 1) { setVoiceWizardStep((voiceWizardStep - 1) as any); }
-                else { setIsVoiceWizardOpen(false); }
+                else { setIsVoiceWizardOpen(false); reopenComposerIfNeeded(); }
               }}
             >
               <Ionicons name={voiceWizardStep > 1 ? "arrow-back" : "close"} size={22} color="#FFF" />
             </TouchableOpacity>
 
-            <View style={{ backgroundColor: "rgba(0,0,0,0.3)", paddingHorizontal: 18, paddingVertical: 8, borderRadius: 20, borderWidth: 1, borderColor: "rgba(255,255,255,0.1)" }}>
-              <Text style={{ color: "#FFF", fontSize: 15, fontWeight: "600" }}>
-                {voiceWizardStep === 1 ? "Name Your Voice" 
-                  : voiceWizardStep === 2 ? "Record Voice Sample" 
-                  : voiceWizardStep === 3 ? "Preview Sample" 
-                  : voiceWizardStep === 4 ? "Verify Identity" 
+            <View style={{ flex: 1, alignItems: "center" }}>
+              <Text style={wz.stepLabel}>STEP {voiceWizardStep} OF 5</Text>
+              <Text style={wz.headerTitle}>
+                {voiceWizardStep === 1 ? "Name Your Voice"
+                  : voiceWizardStep === 2 ? "Record Voice Sample"
+                  : voiceWizardStep === 3 ? "Preview Sample"
+                  : voiceWizardStep === 4 ? "Verify Identity"
                   : "Preview Verification"}
               </Text>
             </View>
@@ -3850,22 +4239,44 @@ Status: ${selectedSongTask?.status || "Unknown"}`,
             <View style={{ width: 40 }} />
           </View>
 
-          {/* Step indicator */}
-          <View style={{ flexDirection: "row", justifyContent: "center", gap: 8, marginBottom: 8 }}>
+          {/* Segmented progress */}
+          <View style={wz.progressRow}>
             {[1, 2, 3, 4, 5].map((s) => (
-              <View key={s} style={{ width: s === voiceWizardStep ? 24 : 8, height: 8, borderRadius: 4, backgroundColor: s === voiceWizardStep ? "#FF2A75" : s < voiceWizardStep ? "rgba(255,42,117,0.4)" : "rgba(255,255,255,0.2)" }} />
+              <View key={s} style={wz.progressTrack}>
+                {s <= voiceWizardStep && (
+                  <LinearGradient
+                    colors={WZ_ACCENT}
+                    start={{ x: 0, y: 0 }}
+                    end={{ x: 1, y: 0 }}
+                    style={[StyleSheet.absoluteFill, s < voiceWizardStep && { opacity: 0.55 }]}
+                  />
+                )}
+              </View>
             ))}
           </View>
 
           {voiceWizardStep === 1 ? (
             /* ── STEP 1: NAME & DESCRIPTION ── */
-            <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} style={{ flex: 1, paddingHorizontal: 28 }}>
-              <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingTop: 20, paddingBottom: 60 }}>
-                {/* Name input */}
-                <Text style={{ color: "rgba(255,255,255,0.6)", fontSize: 13, fontWeight: "600", letterSpacing: 1, marginBottom: 10 }}>VOICE NAME *</Text>
-                <View style={{ backgroundColor: "rgba(255,255,255,0.08)", borderRadius: 14, paddingHorizontal: 16, paddingVertical: 4, marginBottom: 20, borderWidth: 1, borderColor: "rgba(255,255,255,0.1)" }}>
+            <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} style={{ flex: 1 }}>
+              <ScrollView
+                showsVerticalScrollIndicator={false}
+                keyboardShouldPersistTaps="handled"
+                contentContainerStyle={{ paddingHorizontal: 24, paddingTop: 28, paddingBottom: 24 }}
+              >
+                <View style={{ alignItems: "center", marginBottom: 32 }}>
+                  <LinearGradient colors={WZ_ACCENT} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={wz.heroIcon}>
+                    <Ionicons name="person" size={32} color="#FFF" />
+                  </LinearGradient>
+                  <Text style={wz.heroTitle}>Create your AI voice</Text>
+                  <Text style={wz.heroSub}>Give your voice persona a name. You'll record a short sample next.</Text>
+                </View>
+
+                <Text style={wz.fieldLabel}>VOICE NAME</Text>
+                <View style={wz.field}>
+                  <Ionicons name="mic-outline" size={18} color="#FF2A75" style={{ marginRight: 10 }} />
                   <TextInput
-                    style={{ color: "#FFF", fontSize: 17, paddingVertical: 12 }}
+                    id="voice-name-input"
+                    style={wz.fieldInput}
                     placeholder="e.g. My Rap Voice"
                     placeholderTextColor="rgba(255,255,255,0.3)"
                     value={personaName}
@@ -3874,12 +4285,17 @@ Status: ${selectedSongTask?.status || "Unknown"}`,
                     maxLength={40}
                     autoFocus
                   />
+                  <Text style={wz.fieldCount}>{personaName.length}/40</Text>
                 </View>
 
-                <Text style={{ color: "rgba(255,255,255,0.6)", fontSize: 13, fontWeight: "600", letterSpacing: 1, marginBottom: 10 }}>DESCRIPTION (optional)</Text>
-                <View style={{ backgroundColor: "rgba(255,255,255,0.08)", borderRadius: 14, paddingHorizontal: 16, paddingVertical: 4, marginBottom: 36, borderWidth: 1, borderColor: "rgba(255,255,255,0.1)" }}>
+                <Text style={wz.fieldLabel}>
+                  DESCRIPTION <Text style={{ color: "rgba(255,255,255,0.3)", letterSpacing: 0 }}>· optional</Text>
+                </Text>
+                <View style={[wz.field, { alignItems: "flex-start", paddingTop: 14 }]}>
+                  <Ionicons name="document-text-outline" size={18} color="#FF2A75" style={{ marginRight: 10, marginTop: 1 }} />
                   <TextInput
-                    style={{ color: "#FFF", fontSize: 16, paddingVertical: 12 }}
+                    id="voice-description-input"
+                    style={[wz.fieldInput, { minHeight: 72, paddingTop: 0 }]}
                     placeholder="e.g. Deep bass voice, smooth R&B style"
                     placeholderTextColor="rgba(255,255,255,0.3)"
                     value={personaDescription}
@@ -3887,11 +4303,17 @@ Status: ${selectedSongTask?.status || "Unknown"}`,
                     selectionColor="#FF2A75"
                     maxLength={120}
                     multiline
+                    textAlignVertical="top"
                   />
                 </View>
+                <Text style={[wz.fieldCount, { alignSelf: "flex-end", marginTop: -12 }]}>{personaDescription.length}/120</Text>
+              </ScrollView>
 
+              <View style={[wz.footer, { paddingBottom: Math.max(insets.bottom, 16) }]}>
                 <TouchableOpacity
-                  style={{ borderRadius: 28, overflow: "hidden" }}
+                  id="voice-wizard-next"
+                  activeOpacity={0.85}
+                  style={[wz.primaryBtn, !personaName.trim() && { opacity: 0.5 }]}
                   onPress={() => {
                     if (!personaName.trim()) {
                       Alert.alert("Required", "Please provide a name for your voice persona.");
@@ -3900,422 +4322,237 @@ Status: ${selectedSongTask?.status || "Unknown"}`,
                     setVoiceWizardStep(2);
                   }}
                 >
-                  <LinearGradient colors={["#FF2A75", "#FF512F"]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={{ paddingVertical: 18, alignItems: "center", borderRadius: 28 }}>
-                    <Text style={{ color: "#FFF", fontSize: 17, fontWeight: "700", letterSpacing: 0.5 }}>Next</Text>
+                  <LinearGradient colors={WZ_ACCENT} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={wz.primaryBtnInner}>
+                    <Text style={wz.primaryBtnText}>Continue</Text>
+                    <Ionicons name="arrow-forward" size={18} color="#FFF" />
                   </LinearGradient>
                 </TouchableOpacity>
-              </ScrollView>
+              </View>
             </KeyboardAvoidingView>
           ) : voiceWizardStep === 2 ? (
             /* ── STEP 2: RECORD SOURCE ── */
-            <View style={{ flex: 1, justifyContent: "center", alignItems: "center" }}>
-              <Text style={{ color: "rgba(255,255,255,0.6)", fontSize: 14, textAlign: "center", marginBottom: 24, paddingHorizontal: 40, lineHeight: 22 }}>
-                Record 5-30 seconds of clear singing or speaking.
-              </Text>
-
-              {/* Dynamic Bar Visualizer — reacts to microphone volume */}
-              <View style={{ width: 280, height: 120, flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'center', gap: 5, marginBottom: 8 }}>
-                {Array.from({ length: 22 }).map((_, i) => {
-                  const phase = vizTick * 0.3 + i * 0.6;
-                  const baseH = 8 + Math.abs(Math.sin(phase)) * 20;
-                  const volBoost = isWizardRecording ? wizardVolume * 85 * (0.4 + Math.abs(Math.sin(phase + i))) : 0;
-                  const h = Math.min(baseH + volBoost, 100);
-                  const isCenter = Math.abs(i - 10) < 4;
-                  const opacity = isWizardRecording ? (0.3 + wizardVolume * 0.7) : 0.15;
-                  return (
-                    <View
-                      key={i}
-                      style={{
-                        width: 8,
-                        height: Math.max(h, 4),
-                        borderRadius: 4,
-                        backgroundColor: isWizardRecording
-                          ? (isCenter ? "#FF2A75" : `rgba(255,${42 + Math.floor(wizardVolume * 80)},117,${opacity})`)
-                          : "rgba(255,255,255,0.12)",
-                        shadowColor: "#FF2A75",
-                        shadowOpacity: isWizardRecording ? 0.6 : 0,
-                        shadowRadius: 4,
-                        elevation: isWizardRecording ? 3 : 0,
-                      }}
-                    />
-                  );
-                })}
-              </View>
-
-              {/* Timer */}
-              <View style={{ marginTop: 36, alignItems: "center" }}>
-                <Text style={{ color: "#FFF", fontSize: 32, fontWeight: "700", fontVariant: ["tabular-nums"], letterSpacing: 2 }}>
-                  {`${Math.floor(wizardDurationMs / 60000)}:${Math.floor((wizardDurationMs % 60000) / 1000).toString().padStart(2, "0")}`}
-                </Text>
-                <Text style={{ color: "rgba(255,255,255,0.5)", fontSize: 13, marginTop: 6 }}>
-                  {isWizardRecording ? (wizardDurationMs < 5000 ? "Keep going... (min 5s)" : "Recording — tap to stop") : "Tap the button below to start"}
-                </Text>
-              </View>
-
-              {/* Record / Stop button */}
-              <TouchableOpacity
-                style={{
-                  marginTop: 48,
-                  width: 80,
-                  height: 80,
-                  borderRadius: 40,
-                  backgroundColor: isWizardRecording ? "rgba(255,59,48,0.25)" : "rgba(255,42,117,0.2)",
-                  justifyContent: "center",
-                  alignItems: "center",
-                  borderWidth: 2,
-                  borderColor: isWizardRecording ? "#FF3B30" : "#FF2A75",
-                  shadowColor: isWizardRecording ? "#FF3B30" : "#FF2A75",
-                  shadowOffset: { width: 0, height: 0 },
-                  shadowOpacity: 0.7,
-                  shadowRadius: 16,
-                  elevation: 12,
-                }}
-                onPress={() => {
-                  if (isWizardRecording) { stopWizardRecording(true); } else { startWizardRecording(); }
-                }}
+            <View style={{ flex: 1 }}>
+              <ScrollView
+                showsVerticalScrollIndicator={false}
+                contentContainerStyle={{ flexGrow: 1, paddingHorizontal: 24, paddingTop: 24, paddingBottom: 16, alignItems: "center" }}
               >
-                {isWizardRecording ? (
-                  <View style={{ width: 28, height: 28, borderRadius: 6, backgroundColor: "#FF3B30" }} />
-                ) : (
-                  <View style={{ width: 38, height: 38, borderRadius: 19, backgroundColor: "#FF2A75" }} />
-                )}
-              </TouchableOpacity>
+                <Text style={wz.heroSub}>Record 10-30 seconds of clear singing or speaking.</Text>
 
-              {/* Upload alternative */}
-              <TouchableOpacity
-                style={{ marginTop: 24, flexDirection: "row", alignItems: "center", padding: 12 }}
-                onPress={async () => {
-                  try {
-                    const res = await DocumentPicker.getDocumentAsync({ type: "audio/*" });
-                    if (res.assets && res.assets.length > 0) {
-                      setPersonaAudioUri(res.assets[0].uri);
-                      setWizardPreviewSound(null);
-                      setWizardDurationMs(30000);
-                      setVoiceWizardStep(3); // → Preview Source
-                    }
-                  } catch (e) {}
-                }}
-              >
-                <Ionicons name="cloud-upload-outline" size={18} color="rgba(255,255,255,0.5)" />
-                <Text style={{ color: "rgba(255,255,255,0.5)", marginLeft: 8, fontSize: 14 }}>Upload audio instead</Text>
-              </TouchableOpacity>
+                <View style={wz.tipsRow}>
+                  {([
+                    ["volume-mute-outline", "Quiet room"],
+                    ["phone-portrait-outline", "Close to mic"],
+                    ["musical-notes-outline", "Sing naturally"],
+                  ] as const).map(([icon, label]) => (
+                    <View key={label} style={wz.tipChip}>
+                      <Ionicons name={icon} size={13} color="#FF7AA8" />
+                      <Text style={wz.tipText}>{label}</Text>
+                    </View>
+                  ))}
+                </View>
+
+                <View style={[wz.card, isWizardRecording && wz.cardActive]}>
+                  <WizardVisualizer recording={isWizardRecording} volume={wizardVolume} tick={vizTick} />
+                  <Text style={wz.timer}>{formatWizardTime(wizardDurationMs)}</Text>
+                  <Text style={wz.timerHint}>
+                    {isWizardRecording ? (wizardDurationMs < 10000 ? "Keep going... (min 10s)" : wizardDurationMs >= 30000 ? "Great — tap to stop" : "Recording — tap to stop") : "Tap the button below to start"}
+                  </Text>
+                  <WizardDurationBar ms={wizardDurationMs} minMs={10000} maxMs={30000} />
+                </View>
+
+                <View style={{ flex: 1, minHeight: 24 }} />
+
+                <WizardRecordButton
+                  recording={isWizardRecording}
+                  onPress={() => {
+                    if (isWizardRecording) { stopWizardRecording(true); } else { startWizardRecording(); }
+                  }}
+                />
+                <Text style={wz.recordLabel}>{isWizardRecording ? "Tap to stop" : "Tap to record"}</Text>
+              </ScrollView>
+
+              <View style={[wz.footer, { paddingBottom: Math.max(insets.bottom, 16) }]}>
+                <TouchableOpacity
+                  id="voice-wizard-upload"
+                  activeOpacity={0.8}
+                  disabled={isWizardRecording}
+                  style={[wz.secondaryBtn, isWizardRecording && { opacity: 0.35 }]}
+                  onPress={async () => {
+                    try {
+                      const res = await DocumentPicker.getDocumentAsync({ type: "audio/*" });
+                      if (res.assets && res.assets.length > 0) {
+                        setPersonaAudioUri(res.assets[0].uri);
+                        setWizardPreviewSound(null);
+                        setWizardDurationMs(30000);
+                        setVoiceWizardStep(3); // → Preview Source
+                      }
+                    } catch (e) {}
+                  }}
+                >
+                  <Ionicons name="cloud-upload-outline" size={18} color="rgba(255,255,255,0.85)" />
+                  <Text style={wz.secondaryBtnText}>Upload audio instead</Text>
+                </TouchableOpacity>
+              </View>
             </View>
           ) : voiceWizardStep === 3 ? (
             /* ── STEP 3: PREVIEW SOURCE ── */
-            <View style={{ flex: 1, justifyContent: "center", alignItems: "center", paddingHorizontal: 32 }}>
-              {/* Waveform visual */}
-              <View style={{ flexDirection: "row", alignItems: "center", height: 80, gap: 3, marginBottom: 40 }}>
-                {Array.from({ length: 40 }).map((_, i) => {
-                  const h = 8 + Math.abs(Math.sin((i + 1) * 0.7)) * 52;
-                  return (
-                    <View
-                      key={i}
-                      style={{
-                        width: 5,
-                        height: h,
-                        borderRadius: 3,
-                        backgroundColor: isWizardPreviewPlaying
-                          ? `rgba(255,42,117,${0.4 + Math.abs(Math.sin(i * 0.5)) * 0.6})`
-                          : "rgba(255,255,255,0.25)",
-                      }}
-                    />
-                  );
-                })}
-              </View>
-
-              {/* Duration label */}
-              <Text style={{ color: "rgba(255,255,255,0.5)", fontSize: 14, marginBottom: 32 }}>
-                {`${Math.floor(wizardDurationMs / 60000)}:${Math.floor((wizardDurationMs % 60000) / 1000).toString().padStart(2, "0")} recorded`}
-              </Text>
-
-              {/* Play / Stop button */}
-              <TouchableOpacity
-                onPress={isWizardPreviewPlaying ? stopWizardPreview : playWizardPreview}
-                style={{
-                  width: 90,
-                  height: 90,
-                  borderRadius: 45,
-                  backgroundColor: isWizardPreviewPlaying ? "rgba(255,59,48,0.2)" : "rgba(255,42,117,0.2)",
-                  borderWidth: 2,
-                  borderColor: isWizardPreviewPlaying ? "#FF3B30" : "#FF2A75",
-                  justifyContent: "center",
-                  alignItems: "center",
-                  shadowColor: isWizardPreviewPlaying ? "#FF3B30" : "#FF2A75",
-                  shadowOffset: { width: 0, height: 0 },
-                  shadowOpacity: 0.8,
-                  shadowRadius: 20,
-                  elevation: 15,
-                  marginBottom: 16,
-                }}
+            <View style={{ flex: 1 }}>
+              <ScrollView
+                showsVerticalScrollIndicator={false}
+                contentContainerStyle={{ flexGrow: 1, paddingHorizontal: 24, paddingTop: 28, paddingBottom: 16 }}
               >
-                <Ionicons
-                  name={isWizardPreviewPlaying ? "stop" : "play"}
-                  size={36}
-                  color={isWizardPreviewPlaying ? "#FF3B30" : "#FF2A75"}
-                />
-              </TouchableOpacity>
-              <Text style={{ color: "rgba(255,255,255,0.4)", fontSize: 13, marginBottom: 48 }}>
-                {isWizardPreviewPlaying ? "Playing... tap to stop" : "Tap to listen back"}
-              </Text>
+                <View style={{ alignItems: "center", marginBottom: 28 }}>
+                  <LinearGradient colors={WZ_ACCENT} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={wz.heroIcon}>
+                    <Ionicons name="headset" size={30} color="#FFF" />
+                  </LinearGradient>
+                  <Text style={wz.heroTitle}>Listen back</Text>
+                  <Text style={wz.heroSub}>Make sure your voice sounds clear before we analyze it.</Text>
+                </View>
 
-              {/* Status + Cancel */}
-              {isPersonaGenerating ? (
-                <View style={{ alignItems: "center", marginBottom: 24, width: "100%" }}>
-                  <ActivityIndicator color="#FF2A75" size="large" />
-                  <Text style={{ color: "rgba(255,255,255,0.7)", marginTop: 12, fontSize: 14, textAlign: "center", lineHeight: 20 }}>
-                    {personaStatusText || "Processing..."}
-                  </Text>
+                <WizardPreviewCard
+                  label="Voice sample"
+                  playing={isWizardPreviewPlaying}
+                  durationMs={wizardDurationMs}
+                  onPress={isWizardPreviewPlaying ? stopWizardPreview : playWizardPreview}
+                />
+
+                {isPersonaGenerating ? (
+                  <WizardStatusCard text={personaStatusText || "Processing..."} onCancel={handleCancelPersonaCreation} />
+                ) : null}
+              </ScrollView>
+
+              {!isPersonaGenerating && (
+                <View style={[wz.footer, { paddingBottom: Math.max(insets.bottom, 16) }]}>
                   <TouchableOpacity
-                    onPress={handleCancelPersonaCreation}
-                    style={{ marginTop: 16, paddingVertical: 10, paddingHorizontal: 28, borderRadius: 20, borderWidth: 1, borderColor: "rgba(255,255,255,0.25)" }}
+                    id="voice-wizard-analyze"
+                    activeOpacity={0.85}
+                    style={wz.primaryBtn}
+                    onPress={() => {
+                      stopWizardPreview();
+                      handleAnalyzeVoice();
+                    }}
                   >
-                    <Text style={{ color: "rgba(255,255,255,0.6)", fontSize: 14 }}>✕ Cancel</Text>
+                    <LinearGradient colors={WZ_ACCENT} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={wz.primaryBtnInner}>
+                      <Ionicons name="sparkles" size={18} color="#FFF" />
+                      <Text style={wz.primaryBtnText}>Analyze Voice</Text>
+                    </LinearGradient>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    id="voice-wizard-rerecord-sample"
+                    activeOpacity={0.8}
+                    style={[wz.secondaryBtn, { marginTop: 12 }]}
+                    onPress={() => {
+                      stopWizardPreview();
+                      setPersonaAudioUri(null);
+                      setWizardDurationMs(0);
+                      setWizardPreviewSound(null);
+                      setVoiceWizardStep(2);
+                    }}
+                  >
+                    <Ionicons name="refresh" size={18} color="rgba(255,255,255,0.85)" />
+                    <Text style={wz.secondaryBtnText}>Record Again</Text>
                   </TouchableOpacity>
                 </View>
-              ) : null}
-
-              {/* Action buttons */}
-              {!isPersonaGenerating && (
-                <TouchableOpacity
-                  onPress={() => {
-                    stopWizardPreview();
-                    handleAnalyzeVoice();
-                  }}
-                  style={{
-                    width: "100%",
-                    borderRadius: 28,
-                    overflow: "hidden",
-                    marginBottom: 16,
-                  }}
-                >
-                  <LinearGradient
-                    colors={["#FF2A75", "#FF512F"]}
-                    start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
-                    style={{ paddingVertical: 18, alignItems: "center", borderRadius: 28 }}
-                  >
-                    <Text style={{ color: "#FFF", fontSize: 17, fontWeight: "700" }}>Analyze Voice</Text>
-                  </LinearGradient>
-                </TouchableOpacity>
-              )}
-
-              {!isPersonaGenerating && (
-                <TouchableOpacity
-                  onPress={() => {
-                    stopWizardPreview();
-                    setPersonaAudioUri(null);
-                    setWizardDurationMs(0);
-                    setWizardPreviewSound(null);
-                    setVoiceWizardStep(2);
-                  }}
-                  style={{ paddingVertical: 14, paddingHorizontal: 24 }}
-                >
-                  <Text style={{ color: "rgba(255,255,255,0.5)", fontSize: 15 }}>Record Again</Text>
-                </TouchableOpacity>
               )}
             </View>
           ) : voiceWizardStep === 4 ? (
             /* ── STEP 4: RECORD VERIFICATION ── */
-            <View style={{ flex: 1, justifyContent: "center", alignItems: "center" }}>
-              <Text style={{ color: "rgba(255,255,255,0.6)", fontSize: 14, textAlign: "center", marginBottom: 24, paddingHorizontal: 40, lineHeight: 22 }}>
-                Read the authorization script below clearly to verify your voice.
-              </Text>
-
-              {/* Consent Script Box */}
-              <View style={{
-                backgroundColor: "rgba(255,255,255,0.05)",
-                padding: 16,
-                borderRadius: 16,
-                borderWidth: 1,
-                borderColor: "rgba(255,255,255,0.15)",
-                marginHorizontal: 32,
-                marginBottom: 36,
-                alignItems: "center"
-              }}>
-                <Text style={{ color: "#FF2A75", fontSize: 11, fontWeight: "800", letterSpacing: 1.5, marginBottom: 8, textTransform: "uppercase" }}>Verification Phrase</Text>
-                <Text style={{ color: "#FFF", fontSize: 16, fontStyle: "italic", textAlign: "center", lineHeight: 24, fontWeight: "500" }}>
-                  "{validateText || "I authorize this voice cloning process."}"
-                </Text>
-              </View>
-
-              {/* Dynamic Bar Visualizer — reacts to microphone volume */}
-              <View style={{ width: 280, height: 120, flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'center', gap: 5, marginBottom: 8 }}>
-                {Array.from({ length: 22 }).map((_, i) => {
-                  const phase = vizTick * 0.3 + i * 0.6;
-                  const baseH = 8 + Math.abs(Math.sin(phase)) * 20;
-                  const volBoost = isWizardRecording ? wizardVolume * 85 * (0.4 + Math.abs(Math.sin(phase + i))) : 0;
-                  const h = Math.min(baseH + volBoost, 100);
-                  const isCenter = Math.abs(i - 10) < 4;
-                  const opacity = isWizardRecording ? (0.3 + wizardVolume * 0.7) : 0.15;
-                  return (
-                    <View
-                      key={i}
-                      style={{
-                        width: 8,
-                        height: Math.max(h, 4),
-                        borderRadius: 4,
-                        backgroundColor: isWizardRecording
-                          ? (isCenter ? "#FF2A75" : `rgba(255,${42 + Math.floor(wizardVolume * 80)},117,${opacity})`)
-                          : "rgba(255,255,255,0.12)",
-                        shadowColor: "#FF2A75",
-                        shadowOpacity: isWizardRecording ? 0.6 : 0,
-                        shadowRadius: 4,
-                        elevation: isWizardRecording ? 3 : 0,
-                      }}
-                    />
-                  );
-                })}
-              </View>
-
-              {/* Timer */}
-              <View style={{ marginTop: 36, alignItems: "center" }}>
-                <Text style={{ color: "#FFF", fontSize: 32, fontWeight: "700", fontVariant: ["tabular-nums"], letterSpacing: 2 }}>
-                  {`${Math.floor(wizardDurationMs / 60000)}:${Math.floor((wizardDurationMs % 60000) / 1000).toString().padStart(2, "0")}`}
-                </Text>
-                <Text style={{ color: "rgba(255,255,255,0.5)", fontSize: 13, marginTop: 6 }}>
-                  {isWizardRecording ? (wizardDurationMs < 5000 ? "Keep going... (min 5s)" : "Recording — tap to stop") : "Tap the button below to start"}
-                </Text>
-              </View>
-
-              {/* Record / Stop button */}
-              <TouchableOpacity
-                style={{
-                  marginTop: 48,
-                  width: 80,
-                  height: 80,
-                  borderRadius: 40,
-                  backgroundColor: isWizardRecording ? "rgba(255,59,48,0.25)" : "rgba(255,42,117,0.2)",
-                  justifyContent: "center",
-                  alignItems: "center",
-                  borderWidth: 2,
-                  borderColor: isWizardRecording ? "#FF3B30" : "#FF2A75",
-                  shadowColor: isWizardRecording ? "#FF3B30" : "#FF2A75",
-                  shadowOffset: { width: 0, height: 0 },
-                  shadowOpacity: 0.7,
-                  shadowRadius: 16,
-                  elevation: 12,
-                }}
-                onPress={() => {
-                  if (isWizardRecording) { stopWizardRecording(true); } else { startWizardRecording(); }
-                }}
+            <View style={{ flex: 1 }}>
+              <ScrollView
+                showsVerticalScrollIndicator={false}
+                contentContainerStyle={{ flexGrow: 1, paddingHorizontal: 24, paddingTop: 24, paddingBottom: Math.max(insets.bottom, 16) + 8, alignItems: "center" }}
               >
-                {isWizardRecording ? (
-                  <View style={{ width: 28, height: 28, borderRadius: 6, backgroundColor: "#FF3B30" }} />
-                ) : (
-                  <View style={{ width: 38, height: 38, borderRadius: 19, backgroundColor: "#FF2A75" }} />
-                )}
-              </TouchableOpacity>
+                <Text style={wz.heroSub}>
+                  Sing the phrase below exactly as written (singing works best — speaking is okay). Record in a quiet place.
+                </Text>
+
+                {/* Consent Script Box */}
+                <View style={wz.phraseCard}>
+                  <View style={wz.phraseBadge}>
+                    <Ionicons name="shield-checkmark" size={12} color="#FF2A75" />
+                    <Text style={wz.phraseBadgeText}>VERIFICATION PHRASE</Text>
+                  </View>
+                  <Text style={wz.phraseText}>"{validateText || ""}"</Text>
+                </View>
+
+                <View style={[wz.card, isWizardRecording && wz.cardActive]}>
+                  <WizardVisualizer recording={isWizardRecording} volume={wizardVolume} tick={vizTick} />
+                  <Text style={wz.timer}>{formatWizardTime(wizardDurationMs)}</Text>
+                  <Text style={wz.timerHint}>
+                    {isWizardRecording ? (wizardDurationMs < 5000 ? "Keep going... (min 5s)" : "Recording — tap to stop") : "Tap the button below to start"}
+                  </Text>
+                </View>
+
+                <View style={{ flex: 1, minHeight: 24 }} />
+
+                <WizardRecordButton
+                  recording={isWizardRecording}
+                  onPress={() => {
+                    if (isWizardRecording) { stopWizardRecording(true); } else { startWizardRecording(); }
+                  }}
+                />
+                <Text style={wz.recordLabel}>{isWizardRecording ? "Tap to stop" : "Tap to record"}</Text>
+              </ScrollView>
             </View>
           ) : (
             /* ── STEP 5: PREVIEW VERIFICATION & FINALIZE ── */
-            <View style={{ flex: 1, justifyContent: "center", alignItems: "center", paddingHorizontal: 32 }}>
-              {/* Waveform visual */}
-              <View style={{ flexDirection: "row", alignItems: "center", height: 80, gap: 3, marginBottom: 40 }}>
-                {Array.from({ length: 40 }).map((_, i) => {
-                  const h = 8 + Math.abs(Math.sin((i + 1) * 0.7)) * 52;
-                  return (
-                    <View
-                      key={i}
-                      style={{
-                        width: 5,
-                        height: h,
-                        borderRadius: 3,
-                        backgroundColor: isWizardPreviewPlaying
-                          ? `rgba(255,42,117,${0.4 + Math.abs(Math.sin(i * 0.5)) * 0.6})`
-                          : "rgba(255,255,255,0.25)",
-                      }}
-                    />
-                  );
-                })}
-              </View>
-
-              {/* Duration label */}
-              <Text style={{ color: "rgba(255,255,255,0.5)", fontSize: 14, marginBottom: 32 }}>
-                {`${Math.floor(wizardDurationMs / 60000)}:${Math.floor((wizardDurationMs % 60000) / 1000).toString().padStart(2, "0")} recorded`}
-              </Text>
-
-              {/* Play / Stop button */}
-              <TouchableOpacity
-                onPress={isWizardPreviewPlaying ? stopWizardPreview : playWizardPreview}
-                style={{
-                  width: 90,
-                  height: 90,
-                  borderRadius: 45,
-                  backgroundColor: isWizardPreviewPlaying ? "rgba(255,59,48,0.2)" : "rgba(255,42,117,0.2)",
-                  borderWidth: 2,
-                  borderColor: isWizardPreviewPlaying ? "#FF3B30" : "#FF2A75",
-                  justifyContent: "center",
-                  alignItems: "center",
-                  shadowColor: isWizardPreviewPlaying ? "#FF3B30" : "#FF2A75",
-                  shadowOffset: { width: 0, height: 0 },
-                  shadowOpacity: 0.8,
-                  shadowRadius: 20,
-                  elevation: 15,
-                  marginBottom: 16,
-                }}
+            <View style={{ flex: 1 }}>
+              <ScrollView
+                showsVerticalScrollIndicator={false}
+                contentContainerStyle={{ flexGrow: 1, paddingHorizontal: 24, paddingTop: 28, paddingBottom: 16 }}
               >
-                <Ionicons
-                  name={isWizardPreviewPlaying ? "stop" : "play"}
-                  size={36}
-                  color={isWizardPreviewPlaying ? "#FF3B30" : "#FF2A75"}
-                />
-              </TouchableOpacity>
-              <Text style={{ color: "rgba(255,255,255,0.4)", fontSize: 13, marginBottom: 48 }}>
-                {isWizardPreviewPlaying ? "Playing... tap to stop" : "Tap to listen back"}
-              </Text>
+                <View style={{ alignItems: "center", marginBottom: 28 }}>
+                  <LinearGradient colors={WZ_ACCENT} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={wz.heroIcon}>
+                    <Ionicons name="shield-checkmark" size={30} color="#FFF" />
+                  </LinearGradient>
+                  <Text style={wz.heroTitle}>Almost done</Text>
+                  <Text style={wz.heroSub}>Check your verification recording, then create your custom voice.</Text>
+                </View>
 
-              {/* Status + Cancel */}
-              {isPersonaGenerating ? (
-                <View style={{ alignItems: "center", marginBottom: 24, width: "100%" }}>
-                  <ActivityIndicator color="#FF2A75" size="large" />
-                  <Text style={{ color: "rgba(255,255,255,0.7)", marginTop: 12, fontSize: 14, textAlign: "center", lineHeight: 20 }}>
-                    {personaStatusText || "Processing..."}
-                  </Text>
+                <WizardPreviewCard
+                  label="Verification recording"
+                  playing={isWizardPreviewPlaying}
+                  durationMs={wizardDurationMs}
+                  onPress={isWizardPreviewPlaying ? stopWizardPreview : playWizardPreview}
+                />
+
+                {isPersonaGenerating ? (
+                  <WizardStatusCard text={personaStatusText || "Processing..."} onCancel={handleCancelPersonaCreation} />
+                ) : null}
+              </ScrollView>
+
+              {!isPersonaGenerating && (
+                <View style={[wz.footer, { paddingBottom: Math.max(insets.bottom, 16) }]}>
                   <TouchableOpacity
-                    onPress={handleCancelPersonaCreation}
-                    style={{ marginTop: 16, paddingVertical: 10, paddingHorizontal: 28, borderRadius: 20, borderWidth: 1, borderColor: "rgba(255,255,255,0.25)" }}
+                    id="voice-wizard-create"
+                    activeOpacity={0.85}
+                    style={wz.primaryBtn}
+                    onPress={() => {
+                      stopWizardPreview();
+                      handleFinalizeVoice();
+                    }}
                   >
-                    <Text style={{ color: "rgba(255,255,255,0.6)", fontSize: 14 }}>✕ Cancel</Text>
+                    <LinearGradient colors={WZ_ACCENT} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={wz.primaryBtnInner}>
+                      <Ionicons name="checkmark-circle" size={18} color="#FFF" />
+                      <Text style={wz.primaryBtnText}>Create Custom Voice</Text>
+                    </LinearGradient>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    id="voice-wizard-rerecord-verify"
+                    activeOpacity={0.8}
+                    style={[wz.secondaryBtn, { marginTop: 12 }]}
+                    onPress={() => {
+                      stopWizardPreview();
+                      setVerifyAudioUri(null);
+                      setWizardDurationMs(0);
+                      setWizardPreviewSound(null);
+                      setVoiceWizardStep(4);
+                    }}
+                  >
+                    <Ionicons name="refresh" size={18} color="rgba(255,255,255,0.85)" />
+                    <Text style={wz.secondaryBtnText}>Record Again</Text>
                   </TouchableOpacity>
                 </View>
-              ) : null}
-
-              {/* Action buttons */}
-              {!isPersonaGenerating && (
-                <TouchableOpacity
-                  onPress={() => {
-                    stopWizardPreview();
-                    handleFinalizeVoice();
-                  }}
-                  style={{
-                    width: "100%",
-                    borderRadius: 28,
-                    overflow: "hidden",
-                    marginBottom: 16,
-                  }}
-                >
-                  <LinearGradient
-                    colors={["#FF2A75", "#FF512F"]}
-                    start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
-                    style={{ paddingVertical: 18, alignItems: "center", borderRadius: 28 }}
-                  >
-                    <Text style={{ color: "#FFF", fontSize: 17, fontWeight: "700" }}>Create Custom Voice</Text>
-                  </LinearGradient>
-                </TouchableOpacity>
-              )}
-
-              {!isPersonaGenerating && (
-                <TouchableOpacity
-                  onPress={() => {
-                    stopWizardPreview();
-                    setVerifyAudioUri(null);
-                    setWizardDurationMs(0);
-                    setWizardPreviewSound(null);
-                    setVoiceWizardStep(4);
-                  }}
-                  style={{ paddingVertical: 14, paddingHorizontal: 24 }}
-                >
-                  <Text style={{ color: "rgba(255,255,255,0.5)", fontSize: 15 }}>Record Again</Text>
-                </TouchableOpacity>
               )}
             </View>
           )}
@@ -4583,7 +4820,7 @@ const styles = StyleSheet.create({
   },
   scrollContent: {
     paddingHorizontal: 15,
-    paddingBottom: 100, // Space for the floating input
+    paddingBottom: 160, // Space for the floating input
   },
   taskItem: {
     flexDirection: "row",
@@ -4667,23 +4904,24 @@ const styles = StyleSheet.create({
     bottom: Platform.OS === "ios" ? 105 : 95,
     left: 12,
     right: 12,
-    height: 56,
+    minHeight: 56,
+    maxHeight: 120,
     borderRadius: 28,
     overflow: "hidden",
     borderWidth: 1,
     borderColor: "rgba(255,255,255,0.1)",
   },
   inputContainer: {
-    flex: 1,
     flexDirection: "row",
     alignItems: "center",
     paddingHorizontal: 8,
+    minHeight: 56,
   },
   textInputWrapper: {
     flex: 1,
-    height: "100%",
     justifyContent: "center",
     marginLeft: 12,
+    paddingVertical: 12,
   },
   input: {
     fontSize: 16,
@@ -4942,3 +5180,496 @@ const styles = StyleSheet.create({
   },
 });
 // forced refresh 123
+
+
+// ─── VOICE WIZARD — presentational helpers (UI only, no business logic) ─────
+const WZ_ACCENT = ["#FF2A75", "#FF512F"] as const;
+
+const formatWizardTime = (ms: number) =>
+  `${Math.floor(ms / 60000)}:${Math.floor((ms % 60000) / 1000).toString().padStart(2, "0")}`;
+
+function WizardVisualizer({ recording, volume, tick }: { recording: boolean; volume: number; tick: number }) {
+  return (
+    <View style={{ width: "100%", height: 110, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 5 }}>
+      {Array.from({ length: 24 }).map((_, i) => {
+        const phase = tick * 0.3 + i * 0.6;
+        const baseH = 6 + Math.abs(Math.sin(phase)) * 16;
+        const volBoost = recording ? volume * 85 * (0.4 + Math.abs(Math.sin(phase + i))) : 0;
+        const h = Math.min(baseH + volBoost, 100);
+        const isCenter = Math.abs(i - 11.5) < 4;
+        const opacity = recording ? 0.35 + volume * 0.65 : 1;
+        return (
+          <View
+            key={i}
+            style={{
+              width: 6,
+              height: Math.max(h, 4),
+              borderRadius: 3,
+              backgroundColor: recording
+                ? (isCenter ? "#FF2A75" : `rgba(255,${42 + Math.floor(volume * 80)},117,${opacity})`)
+                : "rgba(255,255,255,0.14)",
+            }}
+          />
+        );
+      })}
+    </View>
+  );
+}
+
+function WizardDurationBar({ ms, minMs, maxMs }: { ms: number; minMs: number; maxMs: number }) {
+  const pct = Math.min(ms / maxMs, 1) * 100;
+  const minPct = (minMs / maxMs) * 100;
+  const reachedMin = ms >= minMs;
+  return (
+    <View style={{ width: "100%", marginTop: 18 }}>
+      <View style={wz.durTrack}>
+        <View style={{ width: `${pct}%`, height: "100%", borderRadius: 3, overflow: "hidden" }}>
+          <LinearGradient
+            colors={reachedMin ? WZ_ACCENT : ["rgba(255,42,117,0.55)", "rgba(255,81,47,0.55)"]}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 0 }}
+            style={StyleSheet.absoluteFill}
+          />
+        </View>
+        <View style={[wz.durMarker, { left: `${minPct}%` }]} />
+      </View>
+      <View style={{ flexDirection: "row", justifyContent: "space-between", marginTop: 8 }}>
+        <Text style={wz.durLabel}>0:00</Text>
+        <Text style={[wz.durLabel, reachedMin && { color: "#FF7AA8" }]}>
+          {reachedMin ? "✓ Minimum reached" : `Min ${formatWizardTime(minMs)}`}
+        </Text>
+        <Text style={wz.durLabel}>{formatWizardTime(maxMs)}</Text>
+      </View>
+    </View>
+  );
+}
+
+function WizardRecordButton({ recording, onPress }: { recording: boolean; onPress: () => void }) {
+  const pulse = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    if (!recording) { pulse.stopAnimation(); pulse.setValue(0); return; }
+    pulse.setValue(0);
+    const loop = Animated.loop(
+      Animated.timing(pulse, { toValue: 1, duration: 1400, easing: Easing.out(Easing.ease), useNativeDriver: true })
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [recording, pulse]);
+
+  const ringScale = pulse.interpolate({ inputRange: [0, 1], outputRange: [1, 1.55] });
+  const ringOpacity = pulse.interpolate({ inputRange: [0, 1], outputRange: [0.45, 0] });
+
+  return (
+    <View style={{ width: 130, height: 130, alignItems: "center", justifyContent: "center" }}>
+      {recording && (
+        <Animated.View style={[wz.pulseRing, { transform: [{ scale: ringScale }], opacity: ringOpacity }]} />
+      )}
+      <TouchableOpacity
+        id="voice-wizard-record-btn"
+        activeOpacity={0.85}
+        onPress={onPress}
+        style={[wz.recordOuter, recording && { borderColor: "rgba(255,59,48,0.7)" }]}
+      >
+        {recording ? (
+          <View style={wz.stopSquare} />
+        ) : (
+          <LinearGradient colors={WZ_ACCENT} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={wz.recordInner}>
+            <Ionicons name="mic" size={30} color="#FFF" />
+          </LinearGradient>
+        )}
+      </TouchableOpacity>
+    </View>
+  );
+}
+
+function WizardPreviewCard({ label, playing, durationMs, onPress }: {
+  label: string; playing: boolean; durationMs: number; onPress: () => void;
+}) {
+  return (
+    <View style={[wz.card, { flexDirection: "row", alignItems: "center", paddingVertical: 18 }, playing && wz.cardActive]}>
+      <TouchableOpacity id="voice-wizard-preview-btn" activeOpacity={0.85} onPress={onPress}>
+        {playing ? (
+          <View style={[wz.playBtn, { backgroundColor: "rgba(255,59,48,0.18)", borderWidth: 1.5, borderColor: "#FF3B30" }]}>
+            <Ionicons name="stop" size={24} color="#FF3B30" />
+          </View>
+        ) : (
+          <LinearGradient colors={WZ_ACCENT} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={wz.playBtn}>
+            <Ionicons name="play" size={26} color="#FFF" style={{ marginLeft: 3 }} />
+          </LinearGradient>
+        )}
+      </TouchableOpacity>
+
+      <View style={{ flex: 1, marginLeft: 16 }}>
+        <View style={{ flexDirection: "row", justifyContent: "space-between", marginBottom: 10 }}>
+          <Text style={wz.previewLabel}>{label}</Text>
+          <Text style={wz.previewTime}>{formatWizardTime(durationMs)}</Text>
+        </View>
+        <View style={{ flexDirection: "row", alignItems: "center", height: 40, gap: 2.5 }}>
+          {Array.from({ length: 32 }).map((_, i) => {
+            const h = 6 + Math.abs(Math.sin((i + 1) * 0.7)) * 32;
+            return (
+              <View
+                key={i}
+                style={{
+                  flex: 1,
+                  height: h,
+                  borderRadius: 2,
+                  backgroundColor: playing
+                    ? `rgba(255,42,117,${0.45 + Math.abs(Math.sin(i * 0.5)) * 0.55})`
+                    : "rgba(255,255,255,0.22)",
+                }}
+              />
+            );
+          })}
+        </View>
+        <Text style={wz.previewHint}>{playing ? "Playing... tap to stop" : "Tap to listen back"}</Text>
+      </View>
+    </View>
+  );
+}
+
+function WizardStatusCard({ text, onCancel }: { text: string; onCancel: () => void }) {
+  return (
+    <View style={[wz.card, wz.cardActive, { marginTop: 16, alignItems: "center", paddingVertical: 22 }]}>
+      <ActivityIndicator color="#FF2A75" size="large" />
+      <Text style={wz.statusText}>{text}</Text>
+      <TouchableOpacity id="voice-wizard-cancel" onPress={onCancel} style={wz.cancelBtn} activeOpacity={0.8}>
+        <Ionicons name="close" size={16} color="rgba(255,255,255,0.75)" />
+        <Text style={{ color: "rgba(255,255,255,0.75)", fontSize: 14, fontWeight: "500" }}>Cancel</Text>
+      </TouchableOpacity>
+    </View>
+  );
+}
+
+const wz = StyleSheet.create({
+  glowBlob: {
+    position: "absolute",
+    top: -160,
+    alignSelf: "center",
+    width: 420,
+    height: 420,
+    borderRadius: 210,
+    backgroundColor: "rgba(255,42,117,0.12)",
+  },
+  header: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 20,
+    paddingBottom: 14,
+  },
+  iconBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: "rgba(255,255,255,0.08)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.08)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  stepLabel: {
+    color: "#FF7AA8",
+    fontSize: 11,
+    fontWeight: "700",
+    letterSpacing: 1.6,
+    marginBottom: 3,
+  },
+  headerTitle: {
+    color: "#FFF",
+    fontSize: 17,
+    fontWeight: "700",
+  },
+  progressRow: {
+    flexDirection: "row",
+    gap: 6,
+    paddingHorizontal: 24,
+    marginBottom: 4,
+  },
+  progressTrack: {
+    flex: 1,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: "rgba(255,255,255,0.1)",
+    overflow: "hidden",
+  },
+  heroIcon: {
+    width: 72,
+    height: 72,
+    borderRadius: 24,
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 18,
+    shadowColor: "#FF2A75",
+    shadowOpacity: 0.5,
+    shadowRadius: 20,
+    shadowOffset: { width: 0, height: 6 },
+  },
+  heroTitle: {
+    color: "#FFF",
+    fontSize: 24,
+    fontWeight: "800",
+    marginBottom: 8,
+    textAlign: "center",
+  },
+  heroSub: {
+    color: "rgba(255,255,255,0.6)",
+    fontSize: 14,
+    lineHeight: 21,
+    textAlign: "center",
+    paddingHorizontal: 12,
+  },
+  fieldLabel: {
+    color: "rgba(255,255,255,0.55)",
+    fontSize: 12,
+    fontWeight: "700",
+    letterSpacing: 1.2,
+    marginBottom: 10,
+  },
+  field: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "rgba(255,255,255,0.06)",
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.1)",
+    paddingHorizontal: 16,
+    marginBottom: 22,
+  },
+  fieldInput: {
+    flex: 1,
+    color: "#FFF",
+    fontSize: 16,
+    paddingVertical: 15,
+  },
+  fieldCount: {
+    color: "rgba(255,255,255,0.3)",
+    fontSize: 12,
+    marginLeft: 8,
+    fontVariant: ["tabular-nums"],
+  },
+  footer: {
+    paddingHorizontal: 24,
+    paddingTop: 12,
+  },
+  primaryBtn: {
+    borderRadius: 28,
+    overflow: "hidden",
+    shadowColor: "#FF2A75",
+    shadowOpacity: 0.45,
+    shadowRadius: 16,
+    shadowOffset: { width: 0, height: 6 },
+  },
+  primaryBtnInner: {
+    height: 56,
+    borderRadius: 28,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+  },
+  primaryBtnText: {
+    color: "#FFF",
+    fontSize: 17,
+    fontWeight: "700",
+    letterSpacing: 0.3,
+  },
+  secondaryBtn: {
+    height: 52,
+    borderRadius: 26,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    backgroundColor: "rgba(255,255,255,0.06)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.12)",
+  },
+  secondaryBtnText: {
+    color: "rgba(255,255,255,0.85)",
+    fontSize: 15,
+    fontWeight: "600",
+  },
+  tipsRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    justifyContent: "center",
+    gap: 8,
+    marginTop: 16,
+    marginBottom: 22,
+  },
+  tipChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    paddingHorizontal: 11,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: "rgba(255,42,117,0.1)",
+    borderWidth: 1,
+    borderColor: "rgba(255,42,117,0.22)",
+  },
+  tipText: {
+    color: "rgba(255,255,255,0.8)",
+    fontSize: 12,
+    fontWeight: "500",
+  },
+  card: {
+    width: "100%",
+    backgroundColor: "rgba(255,255,255,0.05)",
+    borderRadius: 24,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.09)",
+    paddingHorizontal: 18,
+    paddingVertical: 20,
+    alignItems: "center",
+  },
+  cardActive: {
+    borderColor: "rgba(255,42,117,0.45)",
+    backgroundColor: "rgba(255,42,117,0.06)",
+  },
+  timer: {
+    color: "#FFF",
+    fontSize: 40,
+    fontWeight: "800",
+    fontVariant: ["tabular-nums"],
+    letterSpacing: 1,
+    marginTop: 8,
+  },
+  timerHint: {
+    color: "rgba(255,255,255,0.55)",
+    fontSize: 13,
+    marginTop: 4,
+  },
+  durTrack: {
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: "rgba(255,255,255,0.1)",
+    position: "relative",
+  },
+  durMarker: {
+    position: "absolute",
+    top: -3,
+    width: 2,
+    height: 12,
+    marginLeft: -1,
+    borderRadius: 1,
+    backgroundColor: "rgba(255,255,255,0.6)",
+  },
+  durLabel: {
+    color: "rgba(255,255,255,0.4)",
+    fontSize: 11,
+    fontVariant: ["tabular-nums"],
+  },
+  pulseRing: {
+    position: "absolute",
+    width: 96,
+    height: 96,
+    borderRadius: 48,
+    backgroundColor: "#FF3B30",
+  },
+  recordOuter: {
+    width: 96,
+    height: 96,
+    borderRadius: 48,
+    borderWidth: 3,
+    borderColor: "rgba(255,255,255,0.16)",
+    backgroundColor: "rgba(10,10,14,0.6)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  recordInner: {
+    width: 76,
+    height: 76,
+    borderRadius: 38,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  stopSquare: {
+    width: 32,
+    height: 32,
+    borderRadius: 8,
+    backgroundColor: "#FF3B30",
+  },
+  recordLabel: {
+    color: "rgba(255,255,255,0.5)",
+    fontSize: 13,
+    fontWeight: "500",
+    marginTop: 4,
+  },
+  phraseCard: {
+    width: "100%",
+    backgroundColor: "rgba(255,255,255,0.05)",
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: "rgba(255,42,117,0.25)",
+    paddingHorizontal: 18,
+    paddingVertical: 18,
+    alignItems: "center",
+    marginTop: 18,
+    marginBottom: 18,
+  },
+  phraseBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    paddingHorizontal: 10,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: "rgba(255,42,117,0.12)",
+    marginBottom: 12,
+  },
+  phraseBadgeText: {
+    color: "#FF2A75",
+    fontSize: 10,
+    fontWeight: "800",
+    letterSpacing: 1.4,
+  },
+  phraseText: {
+    color: "#FFF",
+    fontSize: 18,
+    fontStyle: "italic",
+    fontWeight: "600",
+    lineHeight: 27,
+    textAlign: "center",
+  },
+  playBtn: {
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  previewLabel: {
+    color: "#FFF",
+    fontSize: 15,
+    fontWeight: "600",
+  },
+  previewTime: {
+    color: "rgba(255,255,255,0.5)",
+    fontSize: 13,
+    fontVariant: ["tabular-nums"],
+  },
+  previewHint: {
+    color: "rgba(255,255,255,0.4)",
+    fontSize: 12,
+    marginTop: 8,
+  },
+  statusText: {
+    color: "rgba(255,255,255,0.8)",
+    marginTop: 14,
+    fontSize: 14,
+    textAlign: "center",
+    lineHeight: 20,
+  },
+  cancelBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    marginTop: 16,
+    paddingHorizontal: 22,
+    height: 40,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.2)",
+  },
+});

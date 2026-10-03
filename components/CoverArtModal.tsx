@@ -1,11 +1,33 @@
-import React, { useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, TextInput, Image, Modal, ActivityIndicator, KeyboardAvoidingView, Platform, ScrollView, Dimensions, Alert } from 'react-native';
+import React, { useEffect, useRef, useState } from 'react';
+import {
+  View, Text, StyleSheet, TouchableOpacity, TextInput, Image, Modal, ActivityIndicator,
+  KeyboardAvoidingView, Platform, ScrollView, Dimensions, Alert, Animated, Easing,
+} from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { LinearGradient } from 'expo-linear-gradient';
+import * as Haptics from 'expo-haptics';
+import * as FileSystem from 'expo-file-system/legacy';
+import { decode } from 'base64-arraybuffer';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { supabase } from '../lib/supabase';
 import { useAIStore } from '../store/aiStore';
-import { generateCoverImage } from '../lib/sunoApi';
+import { generateCoverImage, CoverImage } from '../lib/sunoApi';
 
 const { width } = Dimensions.get('window');
+const MAX_PROMPT = 300;
+const IMAGE_COUNT = 2;
+const ACCENT = ['#FF2A75', '#FF5E3A'] as const;
+
+const STYLE_PRESETS: { key: string; icon: keyof typeof Ionicons.glyphMap; text: string }[] = [
+  { key: 'Vibrant', icon: 'color-palette', text: 'vibrant saturated colors' },
+  { key: 'Dark', icon: 'moon', text: 'dark moody cinematic lighting' },
+  { key: 'Retro', icon: 'disc', text: 'retro 70s vintage vinyl aesthetic' },
+  { key: 'Neon', icon: 'flash', text: 'neon glow synthwave' },
+  { key: 'Minimal', icon: 'ellipse-outline', text: 'minimalist clean design' },
+  { key: 'Watercolor', icon: 'brush', text: 'soft watercolor painting' },
+  { key: 'Photo', icon: 'camera', text: 'photorealistic photography' },
+  { key: 'Afro', icon: 'sunny', text: 'african art patterns, warm earthy tones' },
+];
 
 interface CoverArtModalProps {
   visible: boolean;
@@ -13,185 +35,297 @@ interface CoverArtModalProps {
   songTask: any;
 }
 
+const buildAutoPrompt = (songTask: any) => {
+  const track = songTask?.tracks?.[0] || songTask;
+  return [track?.genre || track?.tags, track?.title, 'album cover art']
+    .filter(Boolean).join(', ').slice(0, MAX_PROMPT);
+};
+
 export const CoverArtModal: React.FC<CoverArtModalProps> = ({ visible, onClose, songTask }) => {
+  const insets = useSafeAreaInsets();
   const [prompt, setPrompt] = useState('');
+  const [styles_, setStyles] = useState<string[]>([]);
+  const [isFocused, setIsFocused] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
-  const [generatedImages, setGeneratedImages] = useState<string[]>([]);
+  const [isSaving, setIsSaving] = useState(false);
+  const [generatedImages, setGeneratedImages] = useState<CoverImage[]>([]);
   const [activeIndex, setActiveIndex] = useState(0);
   const { updateTrack } = useAIStore();
+  const runIdRef = useRef(0);
+  const pulse = useRef(new Animated.Value(0)).current;
 
-  // Reset state when song changes
-  React.useEffect(() => {
+  // Reset state when the modal opens / song changes
+  useEffect(() => {
     if (visible) {
-      // Pre-fill a helpful prompt based on the song's title/genre
-      const track = songTask?.tracks?.[0] || songTask;
-      const autoPrompt = [
-        track?.genre || track?.tags,
-        track?.title,
-        'album cover art, vibrant, professional music artwork',
-      ].filter(Boolean).join(', ');
-      setPrompt(autoPrompt);
+      runIdRef.current++;
+      setPrompt(buildAutoPrompt(songTask));
+      setStyles([]);
       setGeneratedImages([]);
       setIsGenerating(false);
+      setIsSaving(false);
       setActiveIndex(0);
+    } else {
+      runIdRef.current++; // ignore late results from a closed modal
     }
   }, [visible, songTask]);
 
+  // Soft pulse while generating
+  useEffect(() => {
+    if (!isGenerating) { pulse.stopAnimation(); pulse.setValue(0); return; }
+    const loop = Animated.loop(Animated.sequence([
+      Animated.timing(pulse, { toValue: 1, duration: 900, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
+      Animated.timing(pulse, { toValue: 0, duration: 900, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
+    ]));
+    loop.start();
+    return () => loop.stop();
+  }, [isGenerating, pulse]);
+
+  const toggleStyle = (key: string) => {
+    Haptics.selectionAsync().catch(() => {});
+    setStyles(prev => (prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key]));
+  };
+
   const handleGenerate = async () => {
-    if (!prompt.trim()) return;
+    if (!prompt.trim() || isGenerating) return;
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
+    const runId = ++runIdRef.current;
+    const styleText = STYLE_PRESETS.filter(s => styles_.includes(s.key)).map(s => s.text).join(', ');
+    const finalPrompt = [prompt.trim(), styleText].filter(Boolean).join(', ');
+
     setIsGenerating(true);
     setGeneratedImages([]);
+    setActiveIndex(0);
     try {
-      const images = await generateCoverImage(prompt.trim(), 2);
-      if (!images || images.length === 0) throw new Error('No images returned.');
-      setGeneratedImages(images);
-      setActiveIndex(0);
+      await generateCoverImage(finalPrompt, IMAGE_COUNT, (img) => {
+        if (runIdRef.current !== runId) return;
+        setGeneratedImages(prev => [...prev, img]);
+      });
     } catch (e: any) {
-      Alert.alert(
-        'Cover Art Failed',
-        e.message || 'Could not generate cover art. Please try again.',
-      );
+      if (runIdRef.current === runId) {
+        Alert.alert('Cover Art Failed', e.message || 'Could not generate cover art. Please try again.');
+      }
     } finally {
-      setIsGenerating(false);
+      if (runIdRef.current === runId) setIsGenerating(false);
+    }
+  };
+
+  /** Upload the chosen local image to Supabase Storage so the cover never expires. */
+  const persistImage = async (img: CoverImage, trackId: string): Promise<string> => {
+    try {
+      const base64 = await FileSystem.readAsStringAsync(img.uri, { encoding: FileSystem.EncodingType.Base64 });
+      const path = `ai_covers/${trackId}_${Date.now()}.jpg`;
+      const { error } = await supabase.storage.from('images').upload(path, decode(base64), {
+        contentType: 'image/jpeg', upsert: true,
+      });
+      if (error) throw error;
+      return supabase.storage.from('images').getPublicUrl(path).data.publicUrl;
+    } catch (e) {
+      console.warn('Cover upload failed, using remote URL', e);
+      return img.remoteUrl;
     }
   };
 
   const handleSave = async () => {
-    if (generatedImages.length > 0 && songTask) {
-      const selectedImage = generatedImages[activeIndex];
-      const trackId = songTask.tracks?.[0]?.id || songTask.id || songTask.taskId;
-      
-      if (!trackId) {
-        onClose();
-        return;
-      }
+    const selected = generatedImages[activeIndex];
+    if (!selected || !songTask || isSaving) { onClose(); return; }
+    const trackId = songTask.tracks?.[0]?.id || songTask.id || songTask.taskId;
+    if (!trackId) { onClose(); return; }
 
-      // Optimistic update
-      updateTrack(songTask.taskId || songTask.id, trackId, { imageUrl: selectedImage });
-      
-      // Close modal instantly
-      onClose();
+    setIsSaving(true);
+    const finalUrl = await persistImage(selected, String(trackId));
+    updateTrack(songTask.taskId || songTask.id, trackId, { imageUrl: finalUrl });
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+    setIsSaving(false);
+    onClose();
 
-      // Update Supabase
-      const { error } = await supabase
-        .from('tracks')
-        .update({ cover_url: selectedImage }) 
-        .eq('id', trackId);
-
-      if (error) {
-        console.error('Failed to update cover art in DB', error);
-        // It might be 'cover_url' or 'image_url'. Let's update both just in case or depend on DB schema.
-      }
-    } else {
-      onClose();
-    }
+    const { error } = await supabase.from('tracks').update({ cover_url: finalUrl }).eq('id', trackId);
+    if (error) console.error('Failed to update cover art in DB', error);
   };
 
   const handleScroll = (event: any) => {
     const slideSize = event.nativeEvent.layoutMeasurement.width;
-    const index = event.nativeEvent.contentOffset.x / slideSize;
-    setActiveIndex(Math.round(index));
+    setActiveIndex(Math.round(event.nativeEvent.contentOffset.x / slideSize));
   };
 
   const songTitle = songTask?.tracks?.[0]?.title || songTask?.title || 'Unknown';
+  const canGenerate = prompt.trim().length > 0 && !isGenerating;
+  const hasImages = generatedImages.length > 0;
+  const showPendingSlide = isGenerating && hasImages && generatedImages.length < IMAGE_COUNT;
+  const slideCount = generatedImages.length + (showPendingSlide ? 1 : 0);
+  const pulseScale = pulse.interpolate({ inputRange: [0, 1], outputRange: [1, 1.12] });
+  const pulseOpacity = pulse.interpolate({ inputRange: [0, 1], outputRange: [0.55, 1] });
 
   return (
     <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.container}>
         <View style={styles.modalContent}>
-          
+
           {/* Header */}
           <View style={styles.header}>
             <TouchableOpacity style={styles.closeBtn} onPress={onClose}>
               <Ionicons name="close" size={24} color="#FFF" />
             </TouchableOpacity>
-            
             <View style={styles.headerTitles}>
               <Text style={styles.title}>Cover Art</Text>
-              <Text style={styles.subtitle}>{songTitle}</Text>
+              <Text style={styles.subtitle} numberOfLines={1}>{songTitle}</Text>
             </View>
-
-            <TouchableOpacity 
-              style={[styles.saveBtn, generatedImages.length === 0 && styles.saveBtnDisabled]} 
+            <TouchableOpacity
+              style={[styles.saveBtn, (!hasImages || isSaving) && styles.saveBtnDisabled]}
               onPress={handleSave}
-              disabled={generatedImages.length === 0}
+              disabled={!hasImages || isSaving}
             >
-              <Text style={[styles.saveBtnText, generatedImages.length === 0 && styles.saveBtnTextDisabled]}>Save</Text>
+              {isSaving
+                ? <ActivityIndicator size="small" color="#000" />
+                : <Text style={[styles.saveBtnText, !hasImages && styles.saveBtnTextDisabled]}>Save</Text>}
             </TouchableOpacity>
           </View>
 
           {/* Main Content Area */}
           <View style={styles.mainArea}>
-            {isGenerating ? (
-              <View style={styles.generatingState}>
-                <ActivityIndicator size="large" color="#FFB300" />
-                <Text style={styles.generatingText}>Creating your vision...</Text>
-              </View>
-            ) : generatedImages.length > 0 ? (
+            {hasImages ? (
               <View style={styles.resultsArea}>
-                <ScrollView 
-                  horizontal 
-                  pagingEnabled 
+                <ScrollView
+                  horizontal
+                  pagingEnabled
                   showsHorizontalScrollIndicator={false}
                   onScroll={handleScroll}
                   scrollEventThrottle={16}
                   contentContainerStyle={{ paddingHorizontal: 20 }}
                 >
                   {generatedImages.map((img, index) => (
-                    <View key={index} style={[styles.imageWrapper, { width: width - 40, marginRight: index === generatedImages.length - 1 ? 0 : 20 }]}>
-                      <Image source={{ uri: img }} style={styles.generatedImage} />
-                      <View style={styles.dotsMenu}>
-                        <Ionicons name="ellipsis-horizontal" size={20} color="#FFF" />
-                      </View>
-                      <View style={styles.editPill}>
-                        <Ionicons name="pencil" size={14} color="#FFF" />
-                        <Text style={styles.editPillText}>Edit</Text>
+                    <View key={img.uri} style={[styles.imageWrapper, { width: width - 40, marginRight: index === slideCount - 1 ? 0 : 20 }]}>
+                      <Image source={{ uri: img.uri }} style={styles.generatedImage} />
+                      <View style={styles.optionBadge}>
+                        <Text style={styles.optionBadgeText}>Option {index + 1}</Text>
                       </View>
                     </View>
                   ))}
+                  {showPendingSlide && (
+                    <View style={[styles.imageWrapper, styles.pendingSlide, { width: width - 40 }]}>
+                      <ActivityIndicator size="large" color={ACCENT[0]} />
+                      <Text style={styles.pendingText}>Creating option {generatedImages.length + 1}…</Text>
+                    </View>
+                  )}
                 </ScrollView>
                 <View style={styles.pagination}>
-                  {generatedImages.map((_, i) => (
+                  {Array.from({ length: slideCount }).map((_, i) => (
                     <View key={i} style={[styles.dot, activeIndex === i && styles.dotActive]} />
                   ))}
                 </View>
               </View>
+            ) : isGenerating ? (
+              <View style={styles.generatingState}>
+                <Animated.View style={{ transform: [{ scale: pulseScale }], opacity: pulseOpacity }}>
+                  <LinearGradient colors={ACCENT} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.generatingOrb}>
+                    <Ionicons name="color-wand" size={34} color="#FFF" />
+                  </LinearGradient>
+                </Animated.View>
+                <Text style={styles.generatingText}>Painting your cover…</Text>
+                <Text style={styles.generatingSub}>This usually takes 5–20 seconds</Text>
+              </View>
             ) : (
               <View style={styles.emptyState}>
-                <Ionicons name="sparkles" size={32} color="#888" style={{ marginBottom: 16 }} />
-                <Text style={styles.emptyText}>Describe the cover art you'd like to create</Text>
+                <View style={styles.emptyIcon}>
+                  <Ionicons name="image-outline" size={30} color={ACCENT[0]} />
+                </View>
+                <Text style={styles.emptyTitle}>Design your cover</Text>
+                <Text style={styles.emptyText}>Describe it below, pick a style, then tap Generate</Text>
               </View>
             )}
           </View>
 
-          {/* Input Area */}
-          <View style={styles.inputContainer}>
-            <TouchableOpacity style={styles.plusBtn}>
-              <Ionicons name="add" size={24} color="#FFF" />
-            </TouchableOpacity>
-            
-            <View style={styles.inputWrapper}>
+          {/* Composer */}
+          <View style={[styles.composer, { paddingBottom: Math.max(insets.bottom, 16) }]}>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.chipsRow}
+              keyboardShouldPersistTaps="handled"
+            >
+              {STYLE_PRESETS.map(s => {
+                const active = styles_.includes(s.key);
+                return (
+                  <TouchableOpacity
+                    key={s.key}
+                    id={`cover-style-${s.key.toLowerCase()}`}
+                    activeOpacity={0.8}
+                    onPress={() => toggleStyle(s.key)}
+                    style={[styles.chip, active && styles.chipActive]}
+                  >
+                    <Ionicons name={s.icon} size={14} color={active ? '#FFF' : '#A0A0A8'} />
+                    <Text style={[styles.chipText, active && styles.chipTextActive]}>{s.key}</Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
+
+            <View style={[styles.card, isFocused && styles.cardFocused]}>
+              <View style={styles.cardHeader}>
+                <View style={styles.cardLabelRow}>
+                  <Ionicons name="sparkles" size={14} color={ACCENT[0]} />
+                  <Text style={styles.cardLabel}>Describe your cover</Text>
+                </View>
+                <Text style={[styles.counter, prompt.length >= MAX_PROMPT && { color: ACCENT[0] }]}>
+                  {prompt.length}/{MAX_PROMPT}
+                </Text>
+              </View>
+
               <TextInput
+                id="cover-prompt-input"
                 style={styles.textInput}
-                placeholder="Make me an image of..."
-                placeholderTextColor="#888"
+                placeholder="e.g. A glowing cross over a sunrise, golden light, hands raised in worship"
+                placeholderTextColor="#5E5E66"
                 value={prompt}
                 onChangeText={setPrompt}
+                onFocus={() => setIsFocused(true)}
+                onBlur={() => setIsFocused(false)}
                 multiline
-                maxLength={200}
+                maxLength={MAX_PROMPT}
+                textAlignVertical="top"
+                selectionColor={ACCENT[0]}
               />
-              {prompt.length > 0 && (
-                <TouchableOpacity style={styles.clearBtn} onPress={() => setPrompt('')}>
-                  <Ionicons name="close-circle" size={18} color="#888" />
+
+              <View style={styles.cardFooter}>
+                <View style={styles.toolRow}>
+                  <TouchableOpacity
+                    id="cover-prompt-auto"
+                    style={styles.toolBtn}
+                    onPress={() => setPrompt(buildAutoPrompt(songTask))}
+                    hitSlop={8}
+                  >
+                    <Ionicons name="refresh" size={16} color="#A0A0A8" />
+                    <Text style={styles.toolText}>Auto</Text>
+                  </TouchableOpacity>
+                  {prompt.length > 0 && (
+                    <TouchableOpacity id="cover-prompt-clear" style={styles.toolBtn} onPress={() => setPrompt('')} hitSlop={8}>
+                      <Ionicons name="close" size={16} color="#A0A0A8" />
+                      <Text style={styles.toolText}>Clear</Text>
+                    </TouchableOpacity>
+                  )}
+                </View>
+
+                <TouchableOpacity
+                  id="cover-generate-btn"
+                  activeOpacity={0.85}
+                  onPress={handleGenerate}
+                  disabled={!canGenerate}
+                  style={!canGenerate && !isGenerating ? { opacity: 0.4 } : undefined}
+                >
+                  <LinearGradient colors={ACCENT} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={styles.generateBtn}>
+                    {isGenerating ? (
+                      <>
+                        <ActivityIndicator size="small" color="#FFF" />
+                        <Text style={styles.generateText}>Creating…</Text>
+                      </>
+                    ) : (
+                      <>
+                        <Ionicons name={hasImages ? 'refresh' : 'color-wand'} size={16} color="#FFF" />
+                        <Text style={styles.generateText}>{hasImages ? 'Regenerate' : 'Generate'}</Text>
+                      </>
+                    )}
+                  </LinearGradient>
                 </TouchableOpacity>
-              )}
-              <TouchableOpacity 
-                style={[styles.sendBtn, !prompt.trim() && { opacity: 0.5 }]} 
-                onPress={handleGenerate}
-                disabled={!prompt.trim() || isGenerating}
-              >
-                <Ionicons name="sparkles" size={20} color="#FFF" />
-              </TouchableOpacity>
+              </View>
             </View>
           </View>
 
@@ -204,7 +338,7 @@ export const CoverArtModal: React.FC<CoverArtModalProps> = ({ visible, onClose, 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#121212',
+    backgroundColor: '#0E0E10',
   },
   modalContent: {
     flex: 1,
@@ -221,12 +355,14 @@ const styles = StyleSheet.create({
     width: 40,
     height: 40,
     borderRadius: 20,
-    backgroundColor: '#2A2A2A',
+    backgroundColor: '#1F1F23',
     alignItems: 'center',
     justifyContent: 'center',
   },
   headerTitles: {
+    flex: 1,
     alignItems: 'center',
+    marginHorizontal: 12,
   },
   title: {
     color: '#FFF',
@@ -241,11 +377,14 @@ const styles = StyleSheet.create({
   saveBtn: {
     backgroundColor: '#FFF',
     paddingHorizontal: 20,
-    paddingVertical: 10,
+    height: 40,
+    minWidth: 76,
     borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   saveBtnDisabled: {
-    backgroundColor: '#2A2A2A',
+    backgroundColor: '#1F1F23',
   },
   saveBtnText: {
     color: '#000',
@@ -253,7 +392,7 @@ const styles = StyleSheet.create({
     fontSize: 16,
   },
   saveBtnTextDisabled: {
-    color: '#666',
+    color: '#555',
   },
   mainArea: {
     flex: 1,
@@ -263,19 +402,56 @@ const styles = StyleSheet.create({
   emptyState: {
     alignItems: 'center',
     justifyContent: 'center',
+    paddingHorizontal: 40,
+  },
+  emptyIcon: {
+    width: 72,
+    height: 72,
+    borderRadius: 24,
+    backgroundColor: 'rgba(255,42,117,0.1)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,42,117,0.25)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 18,
+  },
+  emptyTitle: {
+    color: '#FFF',
+    fontSize: 20,
+    fontWeight: '700',
+    marginBottom: 6,
   },
   emptyText: {
-    color: '#888',
-    fontSize: 16,
+    color: '#8A8A92',
+    fontSize: 14,
+    textAlign: 'center',
+    lineHeight: 20,
   },
   generatingState: {
     alignItems: 'center',
     justifyContent: 'center',
   },
+  generatingOrb: {
+    width: 88,
+    height: 88,
+    borderRadius: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#FF2A75',
+    shadowOpacity: 0.6,
+    shadowRadius: 24,
+    shadowOffset: { width: 0, height: 0 },
+  },
   generatingText: {
     color: '#FFF',
-    marginTop: 16,
-    fontSize: 16,
+    marginTop: 24,
+    fontSize: 17,
+    fontWeight: '600',
+  },
+  generatingSub: {
+    color: '#7A7A82',
+    marginTop: 6,
+    fontSize: 13,
   },
   resultsArea: {
     flex: 1,
@@ -296,34 +472,31 @@ const styles = StyleSheet.create({
     height: '100%',
     borderRadius: 20,
   },
-  dotsMenu: {
+  optionBadge: {
     position: 'absolute',
-    top: 15,
-    right: 15,
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  editPill: {
-    position: 'absolute',
-    bottom: 20,
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: 'rgba(0,0,0,0.6)',
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderRadius: 20,
+    top: 14,
+    left: 14,
+    backgroundColor: 'rgba(0,0,0,0.55)',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 14,
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.2)',
+    borderColor: 'rgba(255,255,255,0.15)',
   },
-  editPillText: {
+  optionBadgeText: {
     color: '#FFF',
-    marginLeft: 6,
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  pendingSlide: {
+    backgroundColor: '#17171A',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.06)',
+  },
+  pendingText: {
+    color: '#9A9AA2',
+    marginTop: 14,
     fontSize: 14,
-    fontWeight: '500',
   },
   pagination: {
     flexDirection: 'row',
@@ -338,52 +511,126 @@ const styles = StyleSheet.create({
     marginHorizontal: 4,
   },
   dotActive: {
-    backgroundColor: '#FFF',
+    width: 20,
+    backgroundColor: '#FF2A75',
   },
-  inputContainer: {
-    flexDirection: 'row',
-    alignItems: 'flex-end',
-    paddingHorizontal: 20,
-    paddingBottom: 30,
+
+  // ── Composer ────────────────────────────────────────────────────────────
+  composer: {
     paddingTop: 10,
-    borderTopWidth: 1,
-    borderTopColor: '#222',
   },
-  plusBtn: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: '#2A2A2A',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 12,
+  chipsRow: {
+    paddingHorizontal: 16,
+    paddingBottom: 10,
+    gap: 8,
   },
-  inputWrapper: {
-    flex: 1,
+  chip: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#2A2A2A',
-    borderRadius: 24,
-    minHeight: 48,
+    gap: 6,
+    paddingHorizontal: 14,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: 'rgba(255,255,255,0.05)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
+  },
+  chipActive: {
+    backgroundColor: 'rgba(255,42,117,0.18)',
+    borderColor: '#FF2A75',
+  },
+  chipText: {
+    color: '#A0A0A8',
+    fontSize: 13,
+    fontWeight: '500',
+  },
+  chipTextActive: {
+    color: '#FFF',
+    fontWeight: '600',
+  },
+  card: {
+    marginHorizontal: 16,
+    borderRadius: 22,
+    backgroundColor: '#18181C',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
     paddingHorizontal: 16,
-    paddingVertical: 8,
+    paddingTop: 14,
+    paddingBottom: 12,
+  },
+  cardFocused: {
+    borderColor: 'rgba(255,42,117,0.6)',
+    backgroundColor: '#1B1A1F',
+  },
+  cardHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 6,
+  },
+  cardLabelRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  cardLabel: {
+    color: '#C8C8CE',
+    fontSize: 12,
+    fontWeight: '600',
+    letterSpacing: 0.6,
+    textTransform: 'uppercase',
+  },
+  counter: {
+    color: '#5E5E66',
+    fontSize: 12,
+    fontVariant: ['tabular-nums'],
   },
   textInput: {
-    flex: 1,
     color: '#FFF',
     fontSize: 16,
-    maxHeight: 100,
-    marginRight: 8,
+    lineHeight: 22,
+    minHeight: 66,
+    maxHeight: 120,
+    paddingTop: 4,
+    paddingBottom: 4,
+    paddingHorizontal: 0,
   },
-  clearBtn: {
-    marginRight: 10,
+  cardFooter: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: 10,
   },
-  sendBtn: {
-    width: 32,
+  toolRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  toolBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 10,
     height: 32,
     borderRadius: 16,
-    backgroundColor: '#FFB300',
+    backgroundColor: 'rgba(255,255,255,0.05)',
+  },
+  toolText: {
+    color: '#A0A0A8',
+    fontSize: 13,
+    fontWeight: '500',
+  },
+  generateBtn: {
+    flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
+    gap: 8,
+    height: 42,
+    paddingHorizontal: 20,
+    borderRadius: 21,
+  },
+  generateText: {
+    color: '#FFF',
+    fontSize: 15,
+    fontWeight: '700',
   },
 });

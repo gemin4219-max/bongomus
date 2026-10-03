@@ -5,7 +5,7 @@ import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system/legacy';
 import { decode } from 'base64-arraybuffer';
 import { LinearGradient } from 'expo-linear-gradient';
-import { Audio } from 'expo-av';
+import { useAudioRecorder, requestRecordingPermissionsAsync, RecordingPresets } from 'expo-audio';
 
 import { supabase } from '../../lib/supabase';
 import {
@@ -45,30 +45,21 @@ export default function CustomVoiceWizard({ visible, onClose, onSuccess }: Custo
   const [validationPhrase, setValidationPhrase] = useState<string | null>(null);
   
   const [verifyAudioUri, setVerifyAudioUri] = useState<string | null>(null);
-  const [recording, setRecording] = useState<Audio.Recording | null>(null);
-  const [sourceRecording, setSourceRecording] = useState<Audio.Recording | null>(null);
+  const verifyRecorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
+  const sourceRecorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
   
   const [isProcessing, setIsProcessing] = useState(false);
 
-  // Cleanup on unmount
-  useEffect(() => {
-    return () => {
-      if (recording) {
-        recording.stopAndUnloadAsync().catch(() => {});
-      }
-      if (sourceRecording) {
-        sourceRecording.stopAndUnloadAsync().catch(() => {});
-      }
-    };
-  }, [recording, sourceRecording]);
+  // Cleanup on unmount handled by expo-audio hooks
 
   // Polling validation phrase
   useEffect(() => {
-    let interval: NodeJS.Timeout;
+    let interval: ReturnType<typeof setInterval>;
     if (step === 1 && taskId) {
       interval = setInterval(async () => {
         try {
           const info = await getVoiceValidationInfo(taskId);
+          if (!info) return; // transient — keep polling
           if (info.status === 'wait_validating' && info.validateInfo) {
             setValidationPhrase(info.validateInfo);
             setStep(2);
@@ -88,36 +79,36 @@ export default function CustomVoiceWizard({ visible, onClose, onSuccess }: Custo
 
   // Polling final voice
   useEffect(() => {
-    let interval: NodeJS.Timeout;
+    let interval: ReturnType<typeof setInterval>;
+    let done = false;
     if (step === 3 && taskId) {
       interval = setInterval(async () => {
         try {
           const info = await getCustomVoiceRecord(taskId);
           if (!info) return; // transient — keep polling
           if (info.status === 'success') {
-            clearInterval(interval);
-
             // voiceId comes directly from typed VoiceRecordData
-            const voiceId = info.voiceId || taskId;
+            const voiceId = info.voiceId;
+            if (!voiceId) return; // not populated yet — keep polling
 
-            // Check availability before proceeding (best practice per API docs)
+            // Check availability before proceeding (best practice per API docs).
+            // Keep polling until it's available — only then stop the interval.
             try {
               const available = await checkVoiceAvailability(taskId);
-              if (!available) {
-                // Voice exists but isn't ready yet — keep polling a bit longer
-                return;
-              }
+              if (!available) return;
             } catch {
               // checkVoiceAvailability failing is non-fatal — continue
             }
-
-            // Add to Zustand store
+            if (done) return;
+            done = true;
+            clearInterval(interval);
             import('../../store/aiStore').then(({ useAIStore }) => {
               useAIStore.getState().addPersona({
                 id: voiceId,
                 name: voiceName,
                 description: 'Custom Voice Clone',
                 createdAt: Date.now(),
+                type: 'voice',
               });
             });
 
@@ -174,12 +165,10 @@ export default function CustomVoiceWizard({ visible, onClose, onSuccess }: Custo
   };
 
   const startRecording = async () => {
-    if (recording) return;
     try {
-      await Audio.requestPermissionsAsync();
-      await Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true });
-      const { recording: newRecording } = await Audio.Recording.createAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY);
-      setRecording(newRecording);
+      const { granted } = await requestRecordingPermissionsAsync();
+      if (!granted) return;
+      verifyRecorder.record();
     } catch (err: any) {
       console.error('Failed to start recording', err);
       Alert.alert('Error', 'Failed to start recording. Please check your microphone permissions.');
@@ -187,12 +176,9 @@ export default function CustomVoiceWizard({ visible, onClose, onSuccess }: Custo
   };
 
   const stopRecording = async () => {
-    if (!recording) return;
-    const currentRecording = recording;
-    setRecording(null);
     try {
-      await currentRecording.stopAndUnloadAsync();
-      const uri = currentRecording.getURI();
+      await verifyRecorder.stop();
+      const uri = verifyRecorder.uri;
       if (uri) setVerifyAudioUri(uri);
     } catch (err: any) {
       console.error('Failed to stop recording', err);
@@ -201,12 +187,10 @@ export default function CustomVoiceWizard({ visible, onClose, onSuccess }: Custo
   };
 
   const startSourceRecording = async () => {
-    if (sourceRecording) return;
     try {
-      await Audio.requestPermissionsAsync();
-      await Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true });
-      const { recording: newRecording } = await Audio.Recording.createAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY);
-      setSourceRecording(newRecording);
+      const { granted } = await requestRecordingPermissionsAsync();
+      if (!granted) return;
+      sourceRecorder.record();
     } catch (err: any) {
       console.error('Failed to start source recording', err);
       Alert.alert('Error', 'Failed to start source recording. Please check your microphone permissions.');
@@ -214,12 +198,9 @@ export default function CustomVoiceWizard({ visible, onClose, onSuccess }: Custo
   };
 
   const stopSourceRecording = async () => {
-    if (!sourceRecording) return;
-    const currentRecording = sourceRecording;
-    setSourceRecording(null);
     try {
-      await currentRecording.stopAndUnloadAsync();
-      const uri = currentRecording.getURI();
+      await sourceRecorder.stop();
+      const uri = sourceRecorder.uri;
       if (uri) {
         setSourceAudioUri(uri);
         setSourceAudioName("Recorded Audio");
@@ -294,10 +275,10 @@ export default function CustomVoiceWizard({ visible, onClose, onSuccess }: Custo
   };
 
   const handleClose = async () => {
-    if (recording) {
+    if (verifyRecorder.isRecording) {
       await stopRecording();
     }
-    if (sourceRecording) {
+    if (sourceRecorder.isRecording) {
       await stopSourceRecording();
     }
     setStep(0);
@@ -332,14 +313,14 @@ export default function CustomVoiceWizard({ visible, onClose, onSuccess }: Custo
               
               <View style={styles.audioSourceContainer}>
                 <TouchableOpacity 
-                  style={[styles.audioActionCard, sourceRecording && styles.audioActionCardActive]} 
-                  onPress={sourceRecording ? stopSourceRecording : startSourceRecording}
+                  style={[styles.audioActionCard, sourceRecorder.isRecording && styles.audioActionCardActive]} 
+                  onPress={sourceRecorder.isRecording ? stopSourceRecording : startSourceRecording}
                 >
-                  <View style={[styles.recordBtnSmall, sourceRecording && styles.recordingActive]}>
-                    <Ionicons name={sourceRecording ? "stop" : "mic"} size={20} color={COLORS.white} />
+                  <View style={[styles.recordBtnSmall, sourceRecorder.isRecording && styles.recordingActive]}>
+                    <Ionicons name={sourceRecorder.isRecording ? "stop" : "mic"} size={20} color={COLORS.white} />
                   </View>
                   <Text style={styles.audioActionText}>
-                    {sourceRecording ? 'Stop Recording' : 'Record Voice'}
+                    {sourceRecorder.isRecording ? 'Stop Recording' : 'Record Voice'}
                   </Text>
                 </TouchableOpacity>
 
@@ -396,13 +377,13 @@ export default function CustomVoiceWizard({ visible, onClose, onSuccess }: Custo
               
               <View style={{ alignItems: 'center', marginTop: 32 }}>
                 <TouchableOpacity 
-                  style={[styles.recordBtn, recording && styles.recordingActive]} 
-                  onPress={recording ? stopRecording : startRecording}
+                  style={[styles.recordBtn, verifyRecorder.isRecording && styles.recordingActive]} 
+                  onPress={verifyRecorder.isRecording ? stopRecording : startRecording}
                 >
-                  <Ionicons name={recording ? "stop" : "mic"} size={32} color={COLORS.white} />
+                  <Ionicons name={verifyRecorder.isRecording ? "stop" : "mic"} size={32} color={COLORS.white} />
                 </TouchableOpacity>
                 <Text style={{ color: COLORS.textSecondary, marginTop: 12 }}>
-                  {recording ? 'Recording... Tap to stop' : 'Tap to record phrase'}
+                  {verifyRecorder.isRecording ? 'Recording... Tap to stop' : 'Tap to record phrase'}
                 </Text>
               </View>
               

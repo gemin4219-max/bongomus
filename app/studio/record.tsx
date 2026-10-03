@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, Alert } from 'react-native';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { Audio } from 'expo-av';
+import { useAudioRecorder, useAudioPlayer, useAudioPlayerStatus, requestRecordingPermissionsAsync, RecordingPresets } from 'expo-audio';
 import { useThemeStore } from '../../store/themeStore';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import GlassBackButton from '../../components/GlassBackButton';
@@ -16,18 +16,26 @@ export default function RecordScreen() {
   const insets = useSafeAreaInsets();
   const { pausePlayer } = usePlayerStore();
 
-  const [recording, setRecording] = useState<Audio.Recording | null>(null);
   const [isRecording, setIsRecording] = useState(false);
   const [vocalUri, setVocalUri] = useState<string | null>(null);
   const [isPlayingPreview, setIsPlayingPreview] = useState(false);
 
-  const beatSoundRef = useRef<Audio.Sound | null>(null);
-  const vocalSoundRef = useRef<Audio.Sound | null>(null);
+  const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
+  const beatPlayer = useAudioPlayer(beatUrl ? String(beatUrl) : null);
+  const vocalPlayer = useAudioPlayer(vocalUri || null);
+  
+  const vocalStatus = useAudioPlayerStatus(vocalPlayer);
+
+  useEffect(() => {
+    if (vocalStatus.didJustFinish && isPlayingPreview) {
+      setIsPlayingPreview(false);
+      beatPlayer.pause();
+    }
+  }, [vocalStatus.didJustFinish]);
 
   useEffect(() => {
     pausePlayer(); // Pause global track player to avoid interference
     setupAudioMode();
-    loadBeat();
     return () => {
       cleanup();
     };
@@ -35,76 +43,45 @@ export default function RecordScreen() {
 
   const setupAudioMode = async () => {
     try {
-      await Audio.requestPermissionsAsync();
-      await Audio.setAudioModeAsync({
-        allowsRecordingIOS: true,
-        playsInSilentModeIOS: true,
-        playThroughEarpieceAndroid: false,
-      });
+      await requestRecordingPermissionsAsync();
     } catch (e) {
-      console.warn('Error setting up audio mode:', e);
-    }
-  };
-
-  const loadBeat = async () => {
-    if (!beatUrl) return;
-    try {
-      const { sound } = await Audio.Sound.createAsync({ uri: beatUrl });
-      beatSoundRef.current = sound;
-    } catch (e) {
-      Alert.alert('Error', 'Failed to load the beat.');
+      console.warn('Error requesting mic:', e);
     }
   };
 
   const cleanup = async () => {
-    if (beatSoundRef.current) await beatSoundRef.current.unloadAsync();
-    if (vocalSoundRef.current) await vocalSoundRef.current.unloadAsync();
-    if (recording) {
+    if (beatPlayer) beatPlayer.pause();
+    if (vocalPlayer) vocalPlayer.pause();
+    if (recorder.isRecording) {
       try {
-        await recording.stopAndUnloadAsync();
+        await recorder.stop();
       } catch (e) {}
-    }
-    
-    // Crucial for iOS: Return audio mode to playback so TrackPlayer isn't muffled!
-    try {
-      await Audio.setAudioModeAsync({
-        allowsRecordingIOS: false,
-        playsInSilentModeIOS: true,
-        playThroughEarpieceAndroid: false,
-      });
-    } catch (e) {
-      console.warn('Error resetting audio mode:', e);
     }
   };
 
   const startRecording = async () => {
     try {
       setVocalUri(null);
-      if (beatSoundRef.current) await beatSoundRef.current.setPositionAsync(0);
+      if (beatPlayer) await beatPlayer.seekTo(0);
 
-      const { recording: newRecording } = await Audio.Recording.createAsync(
-        Audio.RecordingOptionsPresets.HIGH_QUALITY
-      );
-      setRecording(newRecording);
+      recorder.record();
       setIsRecording(true);
 
       // Start playing the beat at the same time
-      if (beatSoundRef.current) await beatSoundRef.current.playAsync();
+      if (beatPlayer) beatPlayer.play();
     } catch (err) {
       console.error('Failed to start recording', err);
     }
   };
 
   const stopRecording = async () => {
-    if (!recording) return;
     setIsRecording(false);
     try {
-      if (beatSoundRef.current) await beatSoundRef.current.stopAsync();
+      if (beatPlayer) beatPlayer.pause();
       
-      await recording.stopAndUnloadAsync();
-      const uri = recording.getURI();
+      await recorder.stop();
+      const uri = recorder.uri;
       setVocalUri(uri);
-      setRecording(null);
     } catch (error) {
       console.error('Failed to stop recording', error);
     }
@@ -113,34 +90,20 @@ export default function RecordScreen() {
   const togglePreview = async () => {
     if (isPlayingPreview) {
       // Stop preview
-      if (beatSoundRef.current) await beatSoundRef.current.stopAsync();
-      if (vocalSoundRef.current) await vocalSoundRef.current.stopAsync();
+      if (beatPlayer) beatPlayer.pause();
+      if (vocalPlayer) vocalPlayer.pause();
       setIsPlayingPreview(false);
     } else {
       // Start preview
       if (!vocalUri) return;
       try {
-        if (!vocalSoundRef.current) {
-          const { sound } = await Audio.Sound.createAsync({ uri: vocalUri });
-          vocalSoundRef.current = sound;
-        }
-        
-        if (beatSoundRef.current) await beatSoundRef.current.setPositionAsync(0);
-        if (vocalSoundRef.current) await vocalSoundRef.current.setPositionAsync(0);
+        if (beatPlayer) await beatPlayer.seekTo(0);
+        if (vocalPlayer) await vocalPlayer.seekTo(0);
 
-        if (beatSoundRef.current) await beatSoundRef.current.playAsync();
-        if (vocalSoundRef.current) await vocalSoundRef.current.playAsync();
+        if (beatPlayer) beatPlayer.play();
+        if (vocalPlayer) vocalPlayer.play();
         
         setIsPlayingPreview(true);
-
-        // Simple sync to stop playing when finished (using the vocal track duration)
-        vocalSoundRef.current.setOnPlaybackStatusUpdate((status) => {
-          if (status.isLoaded && status.didJustFinish) {
-            setIsPlayingPreview(false);
-            beatSoundRef.current?.stopAsync();
-          }
-        });
-
       } catch (e) {
         console.error('Playback preview error', e);
       }

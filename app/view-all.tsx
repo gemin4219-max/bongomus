@@ -100,7 +100,7 @@ export default function ViewAllScreen() {
     <View style={styles.container}>
       <Stack.Screen options={{ headerShown: false }} />
       
-      <LinearGradient colors={['rgba(212,175,55,0.15)', 'transparent']} style={StyleSheet.absoluteFillObject} />
+      <LinearGradient colors={['rgba(212,175,55,0.15)', 'transparent']} style={StyleSheet.absoluteFill} />
       
       <SafeAreaView style={{ flex: 1 }} edges={['top']}>
         {/* Header */}

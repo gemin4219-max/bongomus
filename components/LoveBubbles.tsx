@@ -114,7 +114,7 @@ export default function LoveBubbles() {
 
 const styles = StyleSheet.create({
   container: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     zIndex: 9999, // Ensure it's above everything
     elevation: 9999,
   },

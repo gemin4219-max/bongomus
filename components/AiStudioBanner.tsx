@@ -91,7 +91,7 @@ const styles = StyleSheet.create({
     shadowRadius: 15,
   },
   backgroundBase: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     backgroundColor: '#0a0a0f',
   },
   orb: {

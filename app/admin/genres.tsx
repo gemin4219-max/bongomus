@@ -22,6 +22,7 @@ export default function AdminGenresScreen() {
   const [color, setColor] = useState('#E91E63');
   const [icon, setIcon] = useState('musical-note');
   const [imageUrl, setImageUrl] = useState('');
+  const [imagePrompt, setImagePrompt] = useState('');
 
   useEffect(() => {
     fetchGenres();
@@ -36,6 +37,22 @@ export default function AdminGenresScreen() {
       setGenres(data || []);
     }
     setLoading(false);
+  };
+
+  const generateImage = async () => {
+    if (!name.trim() && !imagePrompt.trim()) return Alert.alert('Error', 'Please enter a genre name or a custom prompt first.');
+    setIsUploadingImage(true);
+    try {
+      const prompt = imagePrompt.trim() 
+        ? imagePrompt.trim() 
+        : `A highly aesthetic, vibrant, abstract album cover representing the music genre: ${name.trim()}. High quality, 4k, digital art`;
+      const url = `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt)}?width=512&height=512&nologo=true`;
+      setImageUrl(url);
+    } catch (err: any) {
+      Alert.alert('Generation Error', err.message);
+    } finally {
+      setIsUploadingImage(false);
+    }
   };
 
   const pickImage = async () => {
@@ -107,6 +124,48 @@ export default function AdminGenresScreen() {
     ]);
   };
 
+  const headerComponent = (
+    <View style={styles.formContainer}>
+      <Text style={styles.sectionTitle}>Add New Genre</Text>
+      
+      <Text style={styles.label}>Genre Name</Text>
+      <TextInput style={styles.input} placeholder="e.g. Bongo Flava" placeholderTextColor={COLORS.textTertiary} value={name} onChangeText={setName} />
+      
+      <Text style={styles.label}>Cover Image</Text>
+      
+      <TextInput 
+        style={styles.input} 
+        placeholder="Custom AI image prompt (optional)" 
+        placeholderTextColor={COLORS.textTertiary} 
+        value={imagePrompt} 
+        onChangeText={setImagePrompt} 
+      />
+
+      <View style={{ flexDirection: 'row', gap: 8, marginBottom: 16 }}>
+        <TouchableOpacity style={[styles.submitBtn, { flex: 1, marginTop: 0, backgroundColor: COLORS.card, borderWidth: 1, borderColor: COLORS.divider }]} onPress={pickImage} disabled={isUploadingImage}>
+          <Text style={[styles.submitBtnText, { color: COLORS.textPrimary, fontSize: 14 }]}>Upload Image</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={[styles.submitBtn, { flex: 1, marginTop: 0, backgroundColor: COLORS.card, borderWidth: 1, borderColor: COLORS.divider }]} onPress={generateImage} disabled={isUploadingImage || (!name.trim() && !imagePrompt.trim())}>
+          <Text style={[styles.submitBtnText, { color: COLORS.textPrimary, fontSize: 14 }]}>Generate AI</Text>
+        </TouchableOpacity>
+      </View>
+      
+      {(imageUrl || isUploadingImage) && (
+        <View style={[styles.input, { alignItems: 'center', justifyContent: 'center', height: 120, padding: 0, overflow: 'hidden' }]}>
+          {isUploadingImage ? (
+            <ActivityIndicator color={COLORS.gold} />
+          ) : imageUrl ? (
+            <Image source={{ uri: imageUrl }} style={{ width: '100%', height: '100%', resizeMode: 'cover' }} />
+          ) : null}
+        </View>
+      )}
+      
+      <TouchableOpacity style={styles.submitBtn} onPress={handleAddGenre} disabled={isSubmitting || isUploadingImage}>
+        {isSubmitting ? <ActivityIndicator color={COLORS.black} /> : <Text style={styles.submitBtnText}>Add Genre</Text>}
+      </TouchableOpacity>
+    </View>
+  );
+
   return (
     <View style={styles.container}>
       <View style={styles.header}>
@@ -120,36 +179,7 @@ export default function AdminGenresScreen() {
       <FlatList
         data={genres}
         keyExtractor={(item) => item.id}
-        ListHeaderComponent={() => (
-          <View style={styles.formContainer}>
-            <Text style={styles.sectionTitle}>Add New Genre</Text>
-            
-            <Text style={styles.label}>Genre Name</Text>
-            <TextInput style={styles.input} placeholder="e.g. Bongo Flava" placeholderTextColor={COLORS.textTertiary} value={name} onChangeText={setName} />
-            
-            <Text style={styles.label}>Cover Image</Text>
-            <TouchableOpacity 
-              style={[styles.input, { alignItems: 'center', justifyContent: 'center', height: 120, borderStyle: 'dashed' }]} 
-              onPress={pickImage}
-              disabled={isUploadingImage}
-            >
-              {isUploadingImage ? (
-                <ActivityIndicator color={COLORS.gold} />
-              ) : imageUrl ? (
-                <Image source={{ uri: imageUrl }} style={{ width: '100%', height: '100%', borderRadius: 8, resizeMode: 'cover' }} />
-              ) : (
-                <View style={{ alignItems: 'center' }}>
-                  <Ionicons name="image-outline" size={32} color={COLORS.textTertiary} />
-                  <Text style={{ color: COLORS.textTertiary, marginTop: 8 }}>Tap to Upload Image</Text>
-                </View>
-              )}
-            </TouchableOpacity>
-            
-            <TouchableOpacity style={styles.submitBtn} onPress={handleAddGenre} disabled={isSubmitting || isUploadingImage}>
-              {isSubmitting ? <ActivityIndicator color={COLORS.black} /> : <Text style={styles.submitBtnText}>Add Genre</Text>}
-            </TouchableOpacity>
-          </View>
-        )}
+        ListHeaderComponent={headerComponent}
         renderItem={({ item }) => (
           <View style={styles.genreCard}>
             <View style={[styles.colorIndicator, { backgroundColor: item.color || COLORS.textTertiary }]} />

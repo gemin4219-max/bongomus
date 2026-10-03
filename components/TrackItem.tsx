@@ -162,7 +162,7 @@ const getStyles = (COLORS: any) => StyleSheet.create({
   coverWrap: { position: 'relative' },
   cover: { width: 52, height: 52, borderRadius: 8, backgroundColor: COLORS.card },
   coverPlaceholder: { justifyContent: 'center', alignItems: 'center' },
-  playingOverlay: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.45)', borderRadius: 8, justifyContent: 'center', alignItems: 'center' },
+  playingOverlay: { ...StyleSheet.absoluteFill, backgroundColor: 'rgba(0,0,0,0.45)', borderRadius: 8, justifyContent: 'center', alignItems: 'center' },
   info: { flex: 1 },
   title: { color: COLORS.textPrimary, fontSize: 14, fontWeight: '600' },
   titlePlaying: { color: COLORS.gold },

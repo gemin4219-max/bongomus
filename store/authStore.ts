@@ -16,6 +16,7 @@ type AuthStore = {
   signOut: () => Promise<void>;
   fetchProfile: (userId?: string) => Promise<void>;
   enableOfflineMode: () => void;
+  disableOfflineMode: () => void;
 };
 
 export const useAuthStore = create<AuthStore>((set, get) => ({
@@ -71,6 +72,10 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
 
   enableOfflineMode: () => {
     set({ isOfflineMode: true });
+  },
+
+  disableOfflineMode: () => {
+    set({ isOfflineMode: false });
   },
 
   signIn: async (email, password) => {

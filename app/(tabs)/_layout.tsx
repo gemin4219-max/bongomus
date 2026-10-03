@@ -44,7 +44,7 @@ export default function TabsLayout() {
         tabBar={(props) => (
           <Animated.View style={[styles.tabBarOuter, { transform: [{ translateY: tabTranslateY }] }]}>
             {/* Glassmorphism blur for tab bar */}
-            <BlurView intensity={80} tint="dark" style={StyleSheet.absoluteFillObject} />
+            <BlurView intensity={80} tint="dark" style={StyleSheet.absoluteFill} />
             <View style={styles.tabBarTopBorder} />
             {currentTrack && !hideMiniPlayer && <MiniPlayer />}
             {currentTrack && !hideMiniPlayer && <View style={styles.playerTabDivider} />}

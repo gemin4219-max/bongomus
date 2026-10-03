@@ -16,6 +16,7 @@ export default function SupportScreen() {
   const session = useAuthStore(s => s.session);
   const [activeTab, setActiveTab] = useState<'submit' | 'tickets'>('submit');
   const [subject, setSubject] = useState('');
+  const [phone, setPhone] = useState('');
   const [message, setMessage] = useState('');
   const [loading, setLoading] = useState(false);
   const [tickets, setTickets] = useState<any[]>([]);
@@ -59,12 +60,14 @@ export default function SupportScreen() {
 
     setLoading(true);
     try {
+      const fullMessage = phone.trim() ? `Phone: ${phone.trim()}\n\n${message.trim()}` : message.trim();
+
       const { error } = await supabase
         .from('support_tickets')
         .insert({
           user_id: session.user.id,
           subject: subject.trim(),
-          message: message.trim(),
+          message: fullMessage,
         });
 
       if (error) throw error;
@@ -125,6 +128,19 @@ export default function SupportScreen() {
             value={subject}
             onChangeText={setSubject}
             maxLength={100}
+          />
+        </View>
+
+        <View style={styles.formGroup}>
+          <Text style={styles.label}>Phone Number (Optional)</Text>
+          <TextInput
+            style={styles.input}
+            placeholder="e.g. +1 234 567 8900"
+            placeholderTextColor={COLORS.textTertiary}
+            value={phone}
+            onChangeText={setPhone}
+            keyboardType="phone-pad"
+            maxLength={20}
           />
         </View>
 

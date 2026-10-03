@@ -62,24 +62,7 @@ export default function ShareCardModal({ visible, onClose, track, quote: initial
 
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
-      {/* Full-screen frosted glass background using track's cover art */}
-      <View style={StyleSheet.absoluteFillObject}>
-        {track.cover_url ? (
-          <Image
-            source={{ uri: track.cover_url }}
-            style={StyleSheet.absoluteFillObject}
-            blurRadius={50}
-            cachePolicy="memory-disk"
-          />
-        ) : null}
-        <LinearGradient
-          colors={['rgba(0,0,0,0.6)', 'rgba(0,0,0,0.8)', 'rgba(0,0,0,0.95)']}
-          style={StyleSheet.absoluteFillObject}
-        />
-      </View>
-      <BlurView intensity={30} tint="dark" style={StyleSheet.absoluteFillObject} />
-
-      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
+      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: 'rgba(10, 10, 15, 0.98)' }}>
 
         {/* ── Header ── */}
         <View style={[styles.header, { top: insets.top > 0 ? insets.top : 20 }]}>
@@ -121,25 +104,8 @@ export default function ShareCardModal({ visible, onClose, track, quote: initial
         {/* ── Share Card ── */}
         <View style={styles.cardContainer}>
           <ViewShot ref={viewShotRef} options={{ format: 'png', quality: 1 }}>
-            <View style={styles.shareCard}>
-              {/* Card bg: blurred cover art */}
-              {track.cover_url ? (
-                <Image
-                  source={{ uri: track.cover_url }}
-                  style={[StyleSheet.absoluteFillObject, { borderRadius: 24 }]}
-                  blurRadius={20}
-                  cachePolicy="memory-disk"
-                />
-              ) : (
-                <LinearGradient colors={['#1a1a2e', '#16213e']} style={StyleSheet.absoluteFillObject} />
-              )}
-              {/* Dark gradient overlay on card */}
-              <LinearGradient
-                colors={['rgba(0,0,0,0.3)', 'rgba(0,0,0,0.6)', 'rgba(0,0,0,0.85)']}
-                style={[StyleSheet.absoluteFillObject, { borderRadius: 24 }]}
-              />
-
-              {/* Glass top row */}
+            <View style={[styles.shareCard, { backgroundColor: '#1c1c28' }]}>
+              {/* Normal top row */}
               <View style={styles.cardHeader}>
                 <Image source={{ uri: track.cover_url }} style={styles.trackCover} />
                 <View style={styles.trackInfo}>

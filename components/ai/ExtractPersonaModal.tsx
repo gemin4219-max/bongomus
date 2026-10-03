@@ -32,12 +32,13 @@ export default function ExtractPersonaModal({ audioId, taskId, onClose }: Extrac
 
     setIsExtracting(true);
     try {
-      const personaId = await generatePersona(audioId, personaName, personaDesc, taskId || undefined);
+      const personaId = await generatePersona(taskId || '', audioId, personaName, personaDesc);
       addPersona({
         id: personaId,
         name: personaName,
         description: personaDesc,
-        createdAt: Date.now()
+        createdAt: Date.now(),
+        type: 'style',
       });
       setPersonaName('');
       setPersonaDesc('');

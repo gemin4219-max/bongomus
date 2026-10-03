@@ -21,6 +21,14 @@ type OfflineStore = {
   getOfflineCoverUri: (trackId: string) => Promise<string | null>;
 };
 
+const getCdnUrl = (url?: string | null): string | undefined => {
+  if (!url) return undefined;
+  if (url.includes('gqxdbwnmnqvtdpxnrgtx.supabase.co')) {
+    return url.replace('gqxdbwnmnqvtdpxnrgtx.supabase.co', 'bongo-cdn.meerkal70.workers.dev');
+  }
+  return url;
+};
+
 export const useOfflineStore = create<OfflineStore>()(
   persist(
     (set, get) => ({
@@ -45,8 +53,9 @@ export const useOfflineStore = create<OfflineStore>()(
           const fileUri = `${FileSystem.documentDirectory}track_${track.id}.${ext}`;
           
           let lastUpdate = 0;
+          const cdnAudioUrl = getCdnUrl(track.audio_url) || track.audio_url;
           const downloadResumable = FileSystem.createDownloadResumable(
-            track.audio_url,
+            cdnAudioUrl,
             fileUri,
             {},
             (downloadProgress) => {
@@ -78,7 +87,8 @@ export const useOfflineStore = create<OfflineStore>()(
               const coverExt = track.cover_url.split('.').pop()?.split('?')[0] || 'jpg';
               const coverFileUri = `${FileSystem.documentDirectory}cover_${track.id}.${coverExt}`;
               try {
-                const coverResult = await FileSystem.downloadAsync(track.cover_url, coverFileUri);
+                const cdnCoverUrl = getCdnUrl(track.cover_url) || track.cover_url;
+                const coverResult = await FileSystem.downloadAsync(cdnCoverUrl, coverFileUri);
                 if (coverResult && coverResult.uri) {
                   localCoverUri = coverResult.uri;
                 }

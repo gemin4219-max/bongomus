@@ -163,6 +163,7 @@ export type Profile = {
   following_count: number;
   track_count: number;
   credits: number;
+  lyrics_used: number;   // how many AI lyrics generations used so far
   partner_id?: string;
   is_admin?: boolean;
 };

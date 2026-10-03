@@ -10,6 +10,7 @@ import { Track } from '../../constants';
 import { usePlayerStore } from '../../store/playerStore';
 import { useOfflineStore } from '../../store/offlineStore';
 import { useAIStore } from '../../store/aiStore';
+import { useLayoutStore } from '../../store/layoutStore';
 import TrackItem from '../../components/TrackItem';
 import { TaskItem } from '../../components/ai/WorkspaceTab';
 import * as MediaLibrary from 'expo-media-library';

@@ -131,7 +131,7 @@ export default function KnowYourArtistScreen() {
     <View style={styles.container}>
       {/* Glassmorphic Header */}
       <View style={styles.header}>
-        <BlurView intensity={80} tint="dark" style={StyleSheet.absoluteFillObject} />
+        <BlurView intensity={80} tint="dark" style={StyleSheet.absoluteFill} />
         <TouchableOpacity style={styles.backBtn} onPress={() => router.back()}>
           <Ionicons name="arrow-back" size={24} color={COLORS.textPrimary} />
         </TouchableOpacity>
@@ -144,13 +144,13 @@ export default function KnowYourArtistScreen() {
         <View style={styles.heroSection}>
           <Image 
             source={{ uri: 'https://images.unsplash.com/photo-1540039155732-d674d5e8ac16?w=1200&q=80' }} 
-            style={StyleSheet.absoluteFillObject}
+            style={StyleSheet.absoluteFill}
             contentFit="cover"
           />
           <LinearGradient 
             colors={['rgba(0,0,0,0.4)', COLORS.black]} 
             locations={[0, 1]}
-            style={StyleSheet.absoluteFillObject} 
+            style={StyleSheet.absoluteFill} 
           />
           
           <Animated.View style={{ opacity: fadeAnim, transform: [{ translateY }], alignItems: 'center' }}>
@@ -163,7 +163,7 @@ export default function KnowYourArtistScreen() {
               activeOpacity={0.8}
               onPress={() => setShowHistory(true)}
             >
-              <LinearGradient colors={['rgba(255,255,255,0.2)', 'rgba(255,255,255,0.05)']} style={StyleSheet.absoluteFillObject} />
+              <LinearGradient colors={['rgba(255,255,255,0.2)', 'rgba(255,255,255,0.05)']} style={StyleSheet.absoluteFill} />
               <Ionicons name="time" size={18} color="#FFF" style={{ marginRight: 8 }} />
               <Text style={styles.historyBtnText}>Read The History</Text>
             </TouchableOpacity>
@@ -214,7 +214,7 @@ export default function KnowYourArtistScreen() {
             />
             <LinearGradient 
               colors={['rgba(0,0,0,0.6)', 'transparent', 'transparent', 'rgba(0,0,0,0.8)']} 
-              style={StyleSheet.absoluteFillObject} 
+              style={StyleSheet.absoluteFill} 
               pointerEvents="none" 
             />
             
@@ -404,7 +404,7 @@ const getStyles = (COLORS: any) => StyleSheet.create({
     height: '100%'
   },
   vintageOverlay: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     backgroundColor: 'rgba(139, 69, 19, 0.15)', // Sepia tint
   },
   cardContent: {
@@ -465,7 +465,7 @@ const getStyles = (COLORS: any) => StyleSheet.create({
     borderColor: '#8b4513'
   },
   paperTexture: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     opacity: 0.45, // Much higher opacity to force the texture visibility
     pointerEvents: 'none',
     mixBlendMode: 'multiply' as any

@@ -11,6 +11,7 @@ import * as Sharing from 'expo-sharing';
 import * as ScreenCapture from 'expo-screen-capture';
 import { captureRef } from 'react-native-view-shot';
 import * as MediaLibrary from 'expo-media-library';
+import * as Clipboard from 'expo-clipboard';
 import { usePlayerStore } from '../store/playerStore';
 import { useAIStore } from '../store/aiStore';
 import { useOfflineStore } from '../store/offlineStore';
@@ -27,51 +28,166 @@ import { useProgress, usePlaybackState, State } from '../store/playerStore';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import GlassBackButton from '../components/GlassBackButton';
 
-const LyricLine = ({ text, isActive, isNext, isPrev, COLORS }: { text: string, isActive: boolean, isNext: boolean, isPrev: boolean, COLORS: any }) => {
-  const anim = useRef(new Animated.Value(0)).current;
+const LyricLine = ({ text, isActive, isNext, isPrev, COLORS, fontSize = 22 }: { text: string, isActive: boolean, isNext: boolean, isPrev: boolean, COLORS: any, fontSize?: number }) => {
+  const anim = useRef(new Animated.Value(isActive ? 1 : 0)).current;
 
   useEffect(() => {
     let target = 0;
     if (isActive) target = 1;
-    else if (isNext || isPrev) target = 0.3;
+    else if (isNext || isPrev) target = 0.4;
 
     Animated.timing(anim, {
       toValue: target,
-      duration: 400,
-      easing: Easing.out(Easing.back(1.5)),
+      duration: 350,
+      easing: Easing.out(Easing.cubic),
       useNativeDriver: true
     }).start();
   }, [isActive, isNext, isPrev]);
 
   const scale = anim.interpolate({
-    inputRange: [0, 0.3, 1],
-    outputRange: [0.7, 0.85, 1.2]
+    inputRange: [0, 0.4, 1],
+    outputRange: [0.94, 0.97, 1.06]
   });
 
+  // Every line stays readable — only the active one is fully lit.
   const opacity = anim.interpolate({
-    inputRange: [0, 0.3, 1],
-    outputRange: [0, 0.4, 1]
-  });
-
-  const translateY = anim.interpolate({
-    inputRange: [0, 1],
-    outputRange: [10, 0]
+    inputRange: [0, 0.4, 1],
+    outputRange: [0.32, 0.55, 1]
   });
 
   return (
-    <Animated.Text 
+    <Animated.Text
       style={{
-        color: isActive ? COLORS.gold : COLORS.textTertiary,
-        fontSize: 22,
-        fontWeight: isActive ? '900' : '600',
+        color: isActive ? COLORS.gold : COLORS.textPrimary,
+        fontSize,
+        lineHeight: Math.round(fontSize * 1.3),
+        fontWeight: isActive ? '900' : '700',
         textAlign: 'center',
-        marginBottom: 24,
         opacity,
-        transform: [{ scale }, { translateY }]
+        transform: [{ scale }]
       }}
     >
       {text || '♪'}
     </Animated.Text>
+  );
+};
+
+const SyncedLyricsView = ({ lines, activeIndex, COLORS, visible, onSeek, fontSize = 22, style }: {
+  lines: { time: number; text: string }[];
+  activeIndex: number;
+  COLORS: any;
+  visible: boolean;
+  onSeek?: (seconds: number) => void;
+  fontSize?: number;
+  style?: any;
+}) => {
+  const scrollViewRef = useRef<ScrollView>(null);
+  const [viewportH, setViewportH] = useState(0);
+  const [lineLayouts, setLineLayouts] = useState<{ [key: number]: number }>({});
+  const userScrolling = useRef(false);
+  const resumeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [detached, setDetached] = useState(false);
+  const activeRef = useRef(activeIndex);
+  activeRef.current = activeIndex;
+
+  const shownIndex = Math.max(0, Math.min(activeIndex, lines.length - 1));
+
+  const centre = (index: number, animated: boolean) => {
+    if (!scrollViewRef.current || !viewportH || lines.length === 0) return;
+    const i = Math.max(0, Math.min(index, lines.length - 1));
+    const lineY = lineLayouts[i];
+    if (lineY !== undefined) {
+      const targetY = Math.max(0, lineY - viewportH / 2 + 20); // 20 is approx half line height
+      scrollViewRef.current.scrollTo({ y: targetY, animated });
+    }
+  };
+
+  useEffect(() => {
+    if (!visible || userScrolling.current) return;
+    centre(activeIndex, true);
+  }, [activeIndex, visible, viewportH, lineLayouts]);
+
+  useEffect(() => {
+    if (!visible) return;
+    const t = setTimeout(() => centre(activeRef.current, false), 80);
+    return () => clearTimeout(t);
+  }, [visible, viewportH]);
+
+  useEffect(() => () => { if (resumeTimer.current) clearTimeout(resumeTimer.current); }, []);
+
+  const resumeFollow = (delay: number) => {
+    if (resumeTimer.current) clearTimeout(resumeTimer.current);
+    resumeTimer.current = setTimeout(() => {
+      userScrolling.current = false;
+      setDetached(false);
+      centre(activeRef.current, true);
+    }, delay);
+  };
+
+  const half = viewportH ? viewportH / 2 : 120;
+
+  return (
+    <View style={[{ flex: 1, overflow: 'hidden' }, style]} onLayout={e => setViewportH(e.nativeEvent.layout.height)}>
+      {viewportH > 0 && (
+        <ScrollView
+          ref={scrollViewRef}
+          showsVerticalScrollIndicator={false}
+          nestedScrollEnabled
+          scrollEventThrottle={16}
+          onScrollBeginDrag={() => {
+            if (resumeTimer.current) clearTimeout(resumeTimer.current);
+            userScrolling.current = true;
+            setDetached(true);
+          }}
+          onScrollEndDrag={() => resumeFollow(3000)}
+          onMomentumScrollBegin={() => {
+            if (userScrolling.current && resumeTimer.current) clearTimeout(resumeTimer.current);
+          }}
+          onMomentumScrollEnd={() => { if (userScrolling.current) resumeFollow(3000); }}
+          contentContainerStyle={{ paddingHorizontal: 24, paddingTop: half, paddingBottom: half }}
+        >
+          {lines.map((item, index) => (
+            <TouchableOpacity
+              key={index}
+              activeOpacity={0.6}
+              disabled={!onSeek}
+              onLayout={(e) => {
+                const y = e.nativeEvent.layout.y;
+                setLineLayouts(prev => ({ ...prev, [index]: y }));
+              }}
+              onPress={() => {
+                if (resumeTimer.current) clearTimeout(resumeTimer.current);
+                userScrolling.current = false;
+                setDetached(false);
+                onSeek?.(item.time / 1000);
+                centre(index, true);
+              }}
+              style={{ paddingVertical: 12 }}
+            >
+              <LyricLine
+                text={item.text}
+                isActive={index === shownIndex}
+                isNext={index === shownIndex + 1}
+                isPrev={index === shownIndex - 1}
+                COLORS={COLORS}
+                fontSize={fontSize}
+              />
+            </TouchableOpacity>
+          ))}
+        </ScrollView>
+      )}
+
+      {detached && (
+        <TouchableOpacity
+          onPress={() => resumeFollow(0)}
+          activeOpacity={0.85}
+          style={{ position: 'absolute', bottom: 10, alignSelf: 'center', flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 14, height: 32, borderRadius: 16, backgroundColor: 'rgba(0,0,0,0.7)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.15)' }}
+        >
+          <Ionicons name="locate" size={14} color={COLORS.gold} />
+          <Text style={{ color: '#FFF', fontSize: 12, fontWeight: '600' }}>Follow song</Text>
+        </TouchableOpacity>
+      )}
+    </View>
   );
 };
 
@@ -82,6 +198,7 @@ export default function PlayerScreen() {
   const { COLORS, vinylTheme, setVinylTheme } = useThemeStore();
   const styles = getStyles(COLORS);
   const router = useRouter();
+  const scrollY = useRef(new Animated.Value(0)).current;
   const { showAd } = useRewardedAd();
   const insets = useSafeAreaInsets();
   const {
@@ -90,7 +207,7 @@ export default function PlayerScreen() {
     reorderQueue,
     removeTrackFromQueue,
     isShuffled,
-    repeatOne,
+    repeatMode,
     togglePlayPause,
     skipNext,
     skipPrev,
@@ -287,7 +404,8 @@ export default function PlayerScreen() {
     const lines = rawLyrics.split('\n');
     const result: { time: number; text: string }[] = [];
     
-    const lrcRegex = /\[(\d{2}):(\d{2}\.\d{2})\](.*)/;
+    // Accept [mm:ss], [m:ss.x], [mm:ss.xx] and [mm:ss.xxx]
+    const lrcRegex = /^\s*\[(\d{1,2}):(\d{1,2}(?:\.\d{1,3})?)\](.*)/;
     let isLrc = false;
     
     lines.forEach(line => {
@@ -324,7 +442,7 @@ export default function PlayerScreen() {
     return result;
   }, [currentTrack, durationMs, lyricsLang]);
 
-  const lyricsScrollRef = useRef<ScrollView>(null);
+
 
 
 
@@ -338,19 +456,12 @@ export default function PlayerScreen() {
     return 0;
   }, [positionMs, parsedLyrics]);
 
-  useEffect(() => {
-      if (showLyrics && lyricsScrollRef.current && activeLyricIndex >= 0 && parsedLyrics) {
-        try {
-          lyricsScrollRef.current.scrollTo({ y: activeLyricIndex * 40, animated: true });
-        } catch (e) {
-          // scroll might fail if items are not rendered yet
-        }
-      }
-    }, [activeLyricIndex, showLyrics, parsedLyrics]);
+  // Auto-scrolling is handled inside <SyncedLyricsView>.
 
   const openPlaylistModal = async () => {
     if (!session) {
       Alert.alert('Login Required', 'You must be logged in to add songs to a playlist.');
+      useAuthStore.getState().disableOfflineMode();
       router.push('/auth');
       return;
     }
@@ -382,9 +493,56 @@ export default function PlayerScreen() {
     }
   };
 
+  const [isExportingMp3, setIsExportingMp3] = useState(false);
+
+  // Downloads the song as a real .mp3 file and opens the native share sheet
+  // (WhatsApp, Telegram, Save to Files, AirDrop, Bluetooth…)
+  const shareAsMp3 = async () => {
+    if (!currentTrack?.audio_url) {
+      Alert.alert('Error', 'This song has no audio file yet.');
+      return;
+    }
+    try {
+      setIsExportingMp3(true);
+      const safeName = (currentTrack.title || 'BongoBox Song')
+        .replace(/[^a-zA-Z0-9 _-]/g, '')
+        .trim()
+        .replace(/\s+/g, '_') || 'BongoBox_Song';
+      const fileUri = `${FileSystem.documentDirectory}${safeName}.mp3`;
+      const info = await FileSystem.getInfoAsync(fileUri);
+      if (!info.exists) {
+        const url = currentTrack.audio_url.replace(/ /g, '%20');
+        await FileSystem.downloadAsync(url, fileUri);
+      }
+      if (!(await Sharing.isAvailableAsync())) {
+        Alert.alert('Saved', `MP3 saved to app documents as ${safeName}.mp3`);
+        return;
+      }
+      await Sharing.shareAsync(fileUri, {
+        mimeType: 'audio/mpeg',
+        UTI: 'public.mp3',
+        dialogTitle: `Share ${currentTrack.title}`,
+      });
+    } catch (e: any) {
+      Alert.alert('Error', e?.message || 'Failed to export MP3');
+    } finally {
+      setIsExportingMp3(false);
+    }
+  };
+
+  const isOwnAiTrack = !!currentTrack?.is_ai && currentTrack?.user_id === session?.user?.id;
+
   const handleShare = async () => {
     if (!currentTrack) return;
-    setShowShareModal(true);
+    
+    const options: any[] = [];
+    if (isOwnAiTrack) {
+      options.push({ text: 'Send MP3 File 🎵', onPress: shareAsMp3 });
+    }
+    options.push({ text: 'Share Card / Link', onPress: () => setShowShareModal(true) });
+    options.push({ text: 'Cancel', style: 'cancel' });
+
+    Alert.alert('Share Song', 'How do you want to share?', options);
   };
 
   const handleReport = () => {
@@ -519,11 +677,11 @@ export default function PlayerScreen() {
   return (
     <View style={styles.container} ref={viewShotRef} collapsable={false}>
       {/* Blurred cover art as full-screen background */}
-      <View style={StyleSheet.absoluteFillObject}>
+      <View style={StyleSheet.absoluteFill}>
         {currentTrack.cover_url ? (
           <Image
             source={{ uri: currentTrack.cover_url }}
-            style={StyleSheet.absoluteFillObject}
+            style={StyleSheet.absoluteFill}
             blurRadius={40}
             cachePolicy="memory-disk"
           />
@@ -531,13 +689,22 @@ export default function PlayerScreen() {
         {/* Dark overlay so it's not too bright */}
         <LinearGradient
           colors={['rgba(0,0,0,0.55)', 'rgba(0,0,0,0.75)', 'rgba(0,0,0,0.92)']}
-          style={StyleSheet.absoluteFillObject}
+          style={StyleSheet.absoluteFill}
         />
       </View>
 
       {/* Glass overlay on entire screen */}
-      <BlurView intensity={20} tint="dark" style={StyleSheet.absoluteFillObject} />
-      <ScrollView style={StyleSheet.absoluteFillObject} showsVerticalScrollIndicator={false} bounces={false}>
+      <BlurView intensity={20} tint="dark" style={StyleSheet.absoluteFill} />
+      <Animated.ScrollView 
+        style={StyleSheet.absoluteFill} 
+        showsVerticalScrollIndicator={false} 
+        bounces={false}
+        scrollEventThrottle={16}
+        onScroll={Animated.event(
+          [{ nativeEvent: { contentOffset: { y: scrollY } } }],
+          { useNativeDriver: true }
+        )}
+      >
         <View style={{ minHeight: Dimensions.get('window').height, paddingTop: insets.top + 28, paddingBottom: insets.bottom + 80, justifyContent: 'space-between' }}>
 
       {/* Header */}
@@ -574,25 +741,22 @@ export default function PlayerScreen() {
           )}
 
 
-          {parsedLyrics ? (<ScrollView 
-            ref={lyricsScrollRef}
-            style={{ width: width - 60, height: width - 60, alignSelf: 'center', paddingHorizontal: 32 }} 
-            contentContainerStyle={{ paddingVertical: 100, alignItems: 'center' }}
-            showsVerticalScrollIndicator={false}
-          >
-            {parsedLyrics.length > 0 ? parsedLyrics.map((item, index) => {
-              const isActive = index === activeLyricIndex;
-              const isNext = index === activeLyricIndex + 1;
-              const isPrev = index === activeLyricIndex - 1;
-              
-              return <LyricLine key={index} text={item.text} isActive={isActive} isNext={isNext} isPrev={isPrev} COLORS={COLORS} />;
-            }) : (
+          {parsedLyrics ? (
+            parsedLyrics.length > 0 ? (
+              <SyncedLyricsView
+                lines={parsedLyrics}
+                activeIndex={activeLyricIndex}
+                COLORS={COLORS}
+                visible={showLyrics && !isLyricsFullscreen}
+                onSeek={seekTo}
+              />
+            ) : (
               <View style={{ alignItems: 'center', justifyContent: 'center', marginTop: 40 }}>
                 <Ionicons name="mic-off-outline" size={64} color={COLORS.textTertiary} />
                 <Text style={{ color: COLORS.textSecondary, marginTop: 16, fontSize: 16, fontWeight: '600' }}>No synced lyrics available.</Text>
               </View>
-            )}
-          </ScrollView>) : null}
+            )
+          ) : null}
         </Animated.View>
 
         {/* Vinyl View */}
@@ -635,10 +799,10 @@ export default function PlayerScreen() {
             {/* Spinning Vintage Vinyl Record */}
             <Animated.View style={[styles.vinylRecord, { transform: [{ scale: scaleAnim }, { rotate: spin }] }]}>
               {/* Heavy Grime Base Layer */}
-              <View style={[StyleSheet.absoluteFillObject, { backgroundColor: 'rgba(50, 35, 15, 0.2)' }]} pointerEvents="none" />
+              <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(50, 35, 15, 0.2)' }]} pointerEvents="none" />
               
               {/* Base Vinyl Grooves */}
-              <LinearGradient colors={['rgba(255,255,255,0.03)', 'rgba(0,0,0,0.8)', 'rgba(255,255,255,0.03)']} style={StyleSheet.absoluteFillObject} pointerEvents="none" />
+              <LinearGradient colors={['rgba(255,255,255,0.03)', 'rgba(0,0,0,0.8)', 'rgba(255,255,255,0.03)']} style={StyleSheet.absoluteFill} pointerEvents="none" />
               <View style={[styles.vinylGroove, { width: width - 90, height: width - 90, opacity: 0.3 }]} />
               <View style={[styles.vinylGroove, { width: width - 110, height: width - 110, opacity: 0.5 }]} />
               <View style={[styles.vinylGroove, { width: width - 130, height: width - 130, opacity: 0.8 }]} />
@@ -688,10 +852,10 @@ export default function PlayerScreen() {
                   </View>
                 )}
                 {/* Vintage Sepia Tint Overlay */}
-                <View style={{ ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(139, 69, 19, 0.25)' }} pointerEvents="none" />
+                <View style={{ ...StyleSheet.absoluteFill, backgroundColor: 'rgba(139, 69, 19, 0.25)' }} pointerEvents="none" />
                 {/* Paper Ring Wear Effect on Label */}
-                <View style={{ ...StyleSheet.absoluteFillObject, borderRadius: 1000, borderWidth: 15, borderColor: 'rgba(0,0,0,0.4)' }} pointerEvents="none" />
-                <View style={{ ...StyleSheet.absoluteFillObject, borderRadius: 1000, borderWidth: 2, borderColor: 'rgba(255,255,255,0.2)', margin: 4 }} pointerEvents="none" />
+                <View style={{ ...StyleSheet.absoluteFill, borderRadius: 1000, borderWidth: 15, borderColor: 'rgba(0,0,0,0.4)' }} pointerEvents="none" />
+                <View style={{ ...StyleSheet.absoluteFill, borderRadius: 1000, borderWidth: 2, borderColor: 'rgba(255,255,255,0.2)', margin: 4 }} pointerEvents="none" />
                 
                 {/* Ad Overlay on Vinyl Center */}
                 <View style={{ position: 'absolute', width: '100%', height: '100%', justifyContent: 'center', alignItems: 'center', transform: [{ scale: 0.65 }] }}>
@@ -705,7 +869,7 @@ export default function PlayerScreen() {
 
             {/* Sharp Vinyl Glare / Scuffed Sheen (STATIC overlay) */}
             <View style={{ position: 'absolute', width: width - 70, height: width - 70, borderRadius: (width - 70) / 2, overflow: 'hidden' }} pointerEvents="none">
-              <LinearGradient colors={['transparent', 'rgba(255,255,255,0.12)', 'transparent', 'rgba(255,255,255,0.06)', 'transparent']} start={{x: 0.2, y: 0}} end={{x: 0.8, y: 1}} style={StyleSheet.absoluteFillObject} />
+              <LinearGradient colors={['transparent', 'rgba(255,255,255,0.12)', 'transparent', 'rgba(255,255,255,0.06)', 'transparent']} start={{x: 0.2, y: 0}} end={{x: 0.8, y: 1}} style={StyleSheet.absoluteFill} />
             </View>
 
 
@@ -713,7 +877,7 @@ export default function PlayerScreen() {
             <View style={[styles.tonearmContainer, { transform: [{ rotate: '18deg' }] }]} pointerEvents="none">
               {/* Base/Pivot */}
               <View style={styles.tonearmBase}>
-                <LinearGradient colors={['#333', '#111']} style={StyleSheet.absoluteFillObject} />
+                <LinearGradient colors={['#333', '#111']} style={StyleSheet.absoluteFill} />
                 <View style={{ width: 16, height: 16, borderRadius: 8, backgroundColor: '#888', borderWidth: 2, borderColor: '#333' }} />
               </View>
               {/* Main Arm */}
@@ -722,7 +886,7 @@ export default function PlayerScreen() {
               <View style={styles.tonearmJoint} />
               {/* Headshell/Needle block */}
               <View style={styles.tonearmHead}>
-                <LinearGradient colors={['#2a2a2a', '#111']} style={StyleSheet.absoluteFillObject} />
+                <LinearGradient colors={['#2a2a2a', '#111']} style={StyleSheet.absoluteFill} />
                 <View style={{ width: 2, height: 4, backgroundColor: 'red', position: 'absolute', bottom: -2, right: 4 }} />
               </View>
             </View>
@@ -760,11 +924,16 @@ export default function PlayerScreen() {
             <Ionicons name="list" size={26} color={COLORS.textSecondary} />
           </TouchableOpacity>
           <TouchableOpacity style={styles.downloadBtn} onPress={handleShare}>
-            {isSharing ? <ActivityIndicator size="small" color={COLORS.textPrimary} /> : <Ionicons name="share-social-outline" size={26} color={COLORS.textSecondary} />}
+            {(isSharing || isExportingMp3) ? <ActivityIndicator size="small" color={COLORS.textPrimary} /> : <Ionicons name="share-social-outline" size={26} color={COLORS.textSecondary} />}
           </TouchableOpacity>
           <TouchableOpacity 
             style={styles.downloadBtn} 
             onPress={() => {
+              // Your own AI songs: export a real MP3 file (save to Files / send to friends)
+              if (isOwnAiTrack) {
+                shareAsMp3();
+                return;
+              }
               if (isDownloaded(currentTrack.id) || isDownloading[currentTrack.id]) return;
               Alert.alert(
                 "Pakua Wimbo",
@@ -935,7 +1104,16 @@ export default function PlayerScreen() {
         </TouchableOpacity>
 
         <TouchableOpacity style={styles.ctrlBtn} onPress={toggleRepeat}>
-          <Ionicons name="repeat" size={26} color={repeatOne ? COLORS.gold : COLORS.textSecondary} />
+          <Ionicons 
+            name={repeatMode === 'one' ? "repeat-sharp" : "repeat"} 
+            size={26} 
+            color={repeatMode !== 'off' ? COLORS.gold : COLORS.textSecondary} 
+          />
+          {repeatMode === 'one' && (
+            <View style={{ position: 'absolute', backgroundColor: COLORS.darkSurface, borderRadius: 10, width: 12, height: 12, justifyContent: 'center', alignItems: 'center', right: 8, bottom: 8 }}>
+              <Text style={{ fontSize: 8, color: COLORS.gold, fontWeight: 'bold' }}>1</Text>
+            </View>
+          )}
         </TouchableOpacity>
       </View>
 
@@ -999,23 +1177,72 @@ export default function PlayerScreen() {
                       <TouchableOpacity style={{ backgroundColor: 'rgba(255,255,255,0.08)', borderRadius: 16, padding: 8 }}>
                         <Ionicons name="musical-notes-outline" size={16} color="rgba(255,255,255,0.6)" />
                       </TouchableOpacity>
-                      <TouchableOpacity style={{ backgroundColor: 'rgba(255,255,255,0.08)', borderRadius: 16, padding: 8 }}>
+                      <TouchableOpacity 
+                        style={{ backgroundColor: 'rgba(255,255,255,0.08)', borderRadius: 16, padding: 8 }}
+                        onPress={async () => {
+                          const text = currentTrack.lyrics || currentTrack.lyrics_swahili || currentTrack.lyrics_english;
+                          if (text) {
+                            await Clipboard.setStringAsync(text);
+                            Alert.alert("Copied", "Lyrics copied to clipboard!");
+                          }
+                        }}
+                      >
                         <Ionicons name="copy-outline" size={16} color="rgba(255,255,255,0.6)" />
                       </TouchableOpacity>
                     </View>
                   </View>
-                  <Text style={{ color: '#fff', fontSize: 16, lineHeight: 28, fontWeight: '500' }}>
-                    {currentTrack.lyrics || currentTrack.lyrics_swahili || currentTrack.lyrics_english || "Lyrics aren't available for this song yet. Check back later!"}
-                  </Text>
+                  {parsedLyrics && parsedLyrics.length > 0 ? (
+                    <View style={{ height: 350, marginHorizontal: -20, marginBottom: -20 }}>
+                      <SyncedLyricsView
+                        lines={parsedLyrics}
+                        activeIndex={activeLyricIndex}
+                        COLORS={COLORS}
+                        visible={true}
+                        onSeek={seekTo}
+                        fontSize={18}
+                      />
+                    </View>
+                  ) : (
+                    <Text style={{ color: '#fff', fontSize: 16, lineHeight: 28, fontWeight: '500' }}>
+                      {currentTrack.lyrics || currentTrack.lyrics_swahili || currentTrack.lyrics_english || "Lyrics aren't available for this song yet. Check back later!"}
+                    </Text>
+                  )}
                 </View>
               </>
             ) : (
               <>
-                <Text style={{ color: '#fff', fontSize: 20, fontWeight: '800', marginBottom: 16 }}>Lyrics</Text>
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+                  <Text style={{ color: '#fff', fontSize: 20, fontWeight: '800' }}>Lyrics</Text>
+                  <TouchableOpacity 
+                        style={{ backgroundColor: 'rgba(255,255,255,0.08)', borderRadius: 16, padding: 8 }}
+                        onPress={async () => {
+                          const text = currentTrack.lyrics || currentTrack.lyrics_swahili || currentTrack.lyrics_english;
+                          if (text) {
+                            await Clipboard.setStringAsync(text);
+                            Alert.alert("Copied", "Lyrics copied to clipboard!");
+                          }
+                        }}
+                      >
+                        <Ionicons name="copy-outline" size={16} color="rgba(255,255,255,0.6)" />
+                  </TouchableOpacity>
+                </View>
                 <BlurView intensity={20} tint="dark" style={{ padding: 20, borderRadius: 16, overflow: 'hidden' }}>
-                  <Text style={{ color: COLORS.textSecondary, fontSize: 16, lineHeight: 24, fontWeight: '500' }}>
-                    {currentTrack.lyrics || currentTrack.lyrics_swahili || currentTrack.lyrics_english || "Lyrics aren't available for this song yet. Check back later!"}
-                  </Text>
+                  {parsedLyrics && parsedLyrics.length > 0 ? (
+                    <View style={{ height: 350, marginHorizontal: -20, marginVertical: -20 }}>
+                      <SyncedLyricsView
+                        lines={parsedLyrics}
+                        activeIndex={activeLyricIndex}
+                        COLORS={COLORS}
+                        visible={true}
+                        onSeek={seekTo}
+                        fontSize={18}
+                      />
+                    </View>
+                  ) : (
+                    <Text style={{ color: COLORS.textSecondary, fontSize: 16, lineHeight: 24, fontWeight: '500' }}>
+                      {currentTrack.lyrics || currentTrack.lyrics_swahili || currentTrack.lyrics_english || "Lyrics aren't available for this song yet. Check back later!"}
+                    </Text>
+                  )}
                 </BlurView>
               </>
             )}
@@ -1054,10 +1281,91 @@ export default function PlayerScreen() {
           </View>
         </View>
       </BlurView>
-      </ScrollView>
+      </Animated.ScrollView>
 
 
 
+
+
+      {/* Sticky Mini Header */}
+      <Animated.View 
+        style={{
+          position: 'absolute',
+          top: 0,
+          left: 0,
+          right: 0,
+          opacity: scrollY.interpolate({
+            inputRange: [width - 60, width],
+            outputRange: [0, 1],
+            extrapolate: 'clamp'
+          }),
+          transform: [{
+            translateY: scrollY.interpolate({
+              inputRange: [width - 61, width - 60],
+              outputRange: [-150, 0],
+              extrapolate: 'clamp'
+            })
+          }],
+          zIndex: 100,
+        }}
+        pointerEvents="box-none"
+      >
+        <BlurView intensity={40} tint="dark" style={{ paddingTop: insets.top, paddingBottom: 12, paddingHorizontal: 20 }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}>
+              
+              <Image source={{ uri: currentTrack?.cover_url }} style={{ width: 40, height: 40, borderRadius: 6, marginRight: 12 }} />
+              <View style={{ flex: 1 }}>
+                <Text style={{ color: '#fff', fontSize: 16, fontWeight: '700' }} numberOfLines={1}>{currentTrack?.title}</Text>
+                <Text style={{ color: 'rgba(255,255,255,0.6)', fontSize: 14 }} numberOfLines={1}>{currentTrack?.artist_name || 'AI Track'}</Text>
+              </View>
+            </View>
+            <TouchableOpacity 
+              onPress={togglePlayPause} 
+              style={{ width: 44, height: 44, borderRadius: 22, backgroundColor: 'rgba(255,255,255,0.1)', justifyContent: 'center', alignItems: 'center', marginLeft: 12 }}
+            >
+              <Ionicons name={isPlaying ? "pause" : "play"} size={22} color="#fff" style={{ marginLeft: isPlaying ? 0 : 2 }} />
+            </TouchableOpacity>
+          </View>
+        </BlurView>
+      </Animated.View>
+
+
+      {/* Sticky Mini Header */}
+      <Animated.View 
+        style={{
+          position: 'absolute',
+          top: 0,
+          left: 0,
+          right: 0,
+          opacity: scrollY.interpolate({
+            inputRange: [width - 60, width],
+            outputRange: [0, 1],
+            extrapolate: 'clamp'
+          }),
+          zIndex: 100,
+        }}
+        pointerEvents="box-none"
+      >
+        <BlurView intensity={40} tint="dark" style={{ paddingTop: insets.top, paddingBottom: 12, paddingHorizontal: 20 }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}>
+              <GlassBackButton onPress={() => router.back()} style={{ position: 'relative', top: 0, left: 0, marginRight: 12, width: 40, height: 40 }} />
+              <Image source={{ uri: currentTrack?.cover_url }} style={{ width: 40, height: 40, borderRadius: 6, marginRight: 12 }} />
+              <View style={{ flex: 1 }}>
+                <Text style={{ color: '#fff', fontSize: 16, fontWeight: '700' }} numberOfLines={1}>{currentTrack?.title}</Text>
+                <Text style={{ color: 'rgba(255,255,255,0.6)', fontSize: 14 }} numberOfLines={1}>{currentTrack?.artist_name || 'AI Track'}</Text>
+              </View>
+            </View>
+            <TouchableOpacity 
+              onPress={togglePlayPause} 
+              style={{ width: 44, height: 44, borderRadius: 22, backgroundColor: 'rgba(255,255,255,0.1)', justifyContent: 'center', alignItems: 'center', marginLeft: 12 }}
+            >
+              <Ionicons name={isPlaying ? "pause" : "play"} size={22} color="#fff" style={{ marginLeft: isPlaying ? 0 : 2 }} />
+            </TouchableOpacity>
+          </View>
+        </BlurView>
+      </Animated.View>
 
       {/* Sleep Timer Modal */}
       <Modal visible={showSleepTimer} transparent animationType="slide">
@@ -1245,17 +1553,13 @@ export default function PlayerScreen() {
           </View>
           {/* ... existing fullscreen lyrics ... */}
           {parsedLyrics ? (
-            <FlatList 
-              data={parsedLyrics}
-              keyExtractor={(item, index) => index.toString()}
-              contentContainerStyle={{ paddingHorizontal: 24, paddingBottom: 100 }}
-              showsVerticalScrollIndicator={false}
-              renderItem={({ item, index }) => {
-                const isActive = index === activeLyricIndex;
-                const isNext = index === activeLyricIndex + 1;
-                const isPrev = index === activeLyricIndex - 1;
-                return <LyricLine text={item.text} isActive={isActive} isNext={isNext} isPrev={isPrev} COLORS={COLORS} />;
-              }}
+            <SyncedLyricsView
+              lines={parsedLyrics}
+              activeIndex={activeLyricIndex}
+              COLORS={COLORS}
+              visible={isLyricsFullscreen}
+              onSeek={seekTo}
+              fontSize={26}
             />
           ) : (
             <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>

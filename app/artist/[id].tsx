@@ -63,6 +63,7 @@ export default function ArtistScreen() {
 
   const toggleFollow = async () => {
     if (!session) {
+      useAuthStore.getState().disableOfflineMode();
       router.push('/auth');
       return;
     }
@@ -201,7 +202,7 @@ export default function ArtistScreen() {
                   </View>
                 )}
                 <Text style={styles.trackPlays}>
-                  {item.play_count ? item.play_count.toLocaleString() : Math.floor(Math.random() * (1000000 - 1000) + 1000).toLocaleString()}
+                  {(item.play_count || 0).toLocaleString()}
                 </Text>
               </View>
             </View>

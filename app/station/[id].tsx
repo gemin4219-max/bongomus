@@ -5,7 +5,7 @@ import { Image } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Haptics from 'expo-haptics';
-import { Audio } from 'expo-av';
+import { useAudioRecorder, useAudioPlayer, useAudioPlayerStatus, requestRecordingPermissionsAsync, RecordingPresets } from 'expo-audio';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system/legacy';
@@ -37,7 +37,9 @@ export default function StationRoomScreen() {
   const [searchResults, setSearchResults] = useState<Track[]>([]);
 
   // Voice Recording
-  const [recording, setRecording] = useState<Audio.Recording | null>(null);
+  const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
+  const voicePlayer = useAudioPlayer(null);
+  const voiceStatus = useAudioPlayerStatus(voicePlayer);
   const [isRecording, setIsRecording] = useState(false);
   const [isUploadingVoice, setIsUploadingVoice] = useState(false);
   const [isSpeakerActive, setIsSpeakerActive] = useState(false);
@@ -56,6 +58,13 @@ export default function StationRoomScreen() {
   // Animations
   const spinValue = useRef(new Animated.Value(0)).current;
   const pulseValue = useRef(new Animated.Value(1)).current;
+
+  useEffect(() => {
+    if (voiceStatus.didJustFinish && isSpeakerActive) {
+      setVolume(1.0);
+      setIsSpeakerActive(false);
+    }
+  }, [voiceStatus.didJustFinish]);
 
   useEffect(() => {
     let channel: any;
@@ -137,14 +146,8 @@ export default function StationRoomScreen() {
     try {
       setIsSpeakerActive(true);
       await setVolume(0.15);
-      const { sound } = await Audio.Sound.createAsync({ uri: url }, { shouldPlay: true });
-      sound.setOnPlaybackStatusUpdate((status: any) => {
-        if (status.didJustFinish) {
-          setVolume(1.0);
-          sound.unloadAsync();
-          setIsSpeakerActive(false);
-        }
-      });
+      voicePlayer.replace(url);
+      voicePlayer.play();
     } catch (e) {
       setVolume(1.0);
       setIsSpeakerActive(false);
@@ -262,12 +265,10 @@ export default function StationRoomScreen() {
   const startRecording = async () => {
     if (isRecording || isUploadingVoice) return;
     try {
-      if (recording) { await recording.stopAndUnloadAsync().catch(() => {}); setRecording(null); }
+      if (recorder.isRecording) { await recorder.stop(); }
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
-      await Audio.requestPermissionsAsync();
-      await Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true });
-      const { recording: newRec } = await Audio.Recording.createAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY);
-      setRecording(newRec);
+      await requestRecordingPermissionsAsync();
+      recorder.record();
       setIsRecording(true);
       await setVolume(0.15);
     } catch (err) { console.error('recording err', err); }
@@ -278,10 +279,11 @@ export default function StationRoomScreen() {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy).catch(() => {});
       setIsRecording(false);
       setVolume(1.0);
-      if (!recording) return;
-      await recording.stopAndUnloadAsync();
-      const uri = recording.getURI();
-      setRecording(null);
+      if (!recorder.isRecording && !recorder.uri) return;
+      if (recorder.isRecording) {
+        await recorder.stop();
+      }
+      const uri = recorder.uri;
       if (!uri) return;
 
       setIsUploadingVoice(true);

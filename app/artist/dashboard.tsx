@@ -1,6 +1,6 @@
 import React, { useCallback, useState, useRef, useEffect, useMemo } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, ScrollView, ActivityIndicator, Alert, RefreshControl, Animated, Dimensions } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Stack, useRouter, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { supabase } from '../../lib/supabase';
@@ -32,6 +32,7 @@ export default function ArtistDashboardScreen() {
   const router = useRouter();
   const session = useAuthStore(s => s.session);
   const profile = useAuthStore(s => s.profile);
+  const insets = useSafeAreaInsets();
 
   const [activeTab, setActiveTab] = useState<'Overview' | 'Audience' | 'Content'>('Overview');
   const [data, setData] = useState<AnalyticsData>({
@@ -154,12 +155,12 @@ export default function ArtistDashboardScreen() {
 
   return (
     <View style={styles.container}>
-      <LinearGradient colors={['#1a1005', '#0d0d0d', '#000000']} style={StyleSheet.absoluteFillObject} />
-      <SafeAreaView style={{ flex: 1 }} edges={['top']}>
+      <LinearGradient colors={['#1a1005', '#0d0d0d', '#000000']} style={StyleSheet.absoluteFill} />
+      <View style={{ flex: 1 }}>
         <Stack.Screen options={{ headerShown: false }} />
 
         {/* Header */}
-        <View style={styles.header}>
+        <View style={[styles.header, { paddingTop: Math.max(insets.top, 20) }]}>
           <TouchableOpacity style={styles.backBtn} onPress={() => router.back()}>
             <Ionicons name="chevron-back" size={26} color="#fff" />
           </TouchableOpacity>
@@ -258,12 +259,12 @@ export default function ArtistDashboardScreen() {
                     style={[styles.heroCard, { marginTop: 16, padding: 28, alignItems: 'center' }]}
                   >
                     <Text style={styles.heroLabel}>Estimated Royalties</Text>
-                    <Text style={[styles.heroValue, { color: '#4ade80', fontSize: 38 }]}>
-                      TZS {estimatedRoyalties.toLocaleString()}
+                    <Text style={[styles.heroValue, { color: '#4ade80', fontSize: 32 }]}>
+                      Coming Soon
                     </Text>
                     <View style={styles.royaltyRow}>
                       <Ionicons name="information-circle-outline" size={14} color="rgba(255,255,255,0.35)" />
-                      <Text style={styles.royaltyNote}>Based on avg. TZS 5.5 payout per stream</Text>
+                      <Text style={styles.royaltyNote}>Payout structure is being finalized</Text>
                     </View>
                   </LinearGradient>
                 </>
@@ -334,12 +335,7 @@ export default function ArtistDashboardScreen() {
                                 <Ionicons name="heart" size={11} color="#ff6b8a" />
                                 <Text style={styles.miniStatTxt}>{track.like_count.toLocaleString()}</Text>
                               </View>
-                              <View style={styles.miniStat}>
-                                <Ionicons name="cash-outline" size={11} color="#4ade80" />
-                                <Text style={[styles.miniStatTxt, { color: '#4ade80' }]}>
-                                  TZS {(track.play_count * 5.5).toLocaleString(undefined, { maximumFractionDigits: 0 })}
-                                </Text>
-                              </View>
+
                             </View>
                           </View>
                           <TouchableOpacity
@@ -358,7 +354,7 @@ export default function ArtistDashboardScreen() {
             </Animated.View>
           )}
         </ScrollView>
-      </SafeAreaView>
+      </View>
     </View>
   );
 }

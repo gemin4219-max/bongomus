@@ -39,6 +39,7 @@ export default function EventDetailsScreen() {
   const handleGetTickets = () => {
     if (!session) {
       Alert.alert('Login Required', 'You must be logged in to get tickets.');
+      useAuthStore.getState().disableOfflineMode();
       router.push('/auth');
       return;
     }

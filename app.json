@@ -60,7 +60,9 @@
           "iosAppId": "ca-app-pub-3940256099942544~1458002511"
         }
       ],
-      "expo-asset"
+      "expo-asset",
+      "@sentry/react-native/expo",
+      "@sentry/react-native"
     ],
     "experiments": {
       "typedRoutes": true

@@ -135,7 +135,7 @@ export default function JamSessionScreen() {
             </View>
 
             <TouchableOpacity style={styles.startBtn} onPress={handleStart}>
-              <LinearGradient colors={['#D4AF37', '#AA8C2C']} style={StyleSheet.absoluteFillObject} />
+              <LinearGradient colors={['#D4AF37', '#AA8C2C']} style={StyleSheet.absoluteFill} />
               <Text style={styles.startBtnText}>Start as Driver</Text>
             </TouchableOpacity>
 

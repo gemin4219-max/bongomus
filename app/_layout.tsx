@@ -29,6 +29,7 @@ import AnimatedSplash from '../components/AnimatedSplash';
 import ThemeEffects from '../components/ThemeEffects';
 import { useFonts, Outfit_400Regular, Outfit_600SemiBold, Outfit_700Bold, Outfit_800ExtraBold, Outfit_900Black } from '@expo-google-fonts/outfit';
 import { registerForPushNotificationsAsync } from '../lib/notifications';
+import { registerInstall } from '../lib/installTracker';
 import '../i18n';
 
 // Ignore harmless background Supabase auth network errors and Expo Go splash screen fast-refresh warnings in dev mode
@@ -42,7 +43,15 @@ const customTheme = {
   },
 };
 
-export default function RootLayout() {
+// --- TEMPORARILY DISABLED FOR EXPO GO ---
+// import * as Sentry from '@sentry/react-native';
+// Sentry.init({
+//   dsn: 'https://c552ff30635ec7a2ab7a9e794f0f8bba@o4512188043493376.ingest.de.sentry.io/4512188048212048',
+//   debug: false, 
+// });
+// ---------------------------------------
+
+function RootLayout() {
   const { init, session, isLoading, isOfflineMode } = useAuthStore();
   const segments = useSegments();
   const router = useRouter();
@@ -69,6 +78,8 @@ export default function RootLayout() {
     if (session?.user?.id) {
       registerForPushNotificationsAsync(session.user.id);
     }
+    // Count this install for the admin dashboard (re-runs on login to link the account)
+    registerInstall();
   }, [session?.user?.id]);
 
   useEffect(() => {
@@ -129,6 +140,9 @@ export default function RootLayout() {
     </GestureHandlerRootView>
   );
 }
+
+export default RootLayout;
+// export default Sentry.wrap(RootLayout);
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: '#0A0A0F' },

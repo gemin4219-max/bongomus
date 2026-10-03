@@ -14,11 +14,13 @@ export interface AISongTask {
 }
 
 export interface Persona {
-  id: string; // Suno Persona ID
+  id: string; // Suno Persona ID, or Suno Voice voiceId when type === 'voice'
   name: string;
   description: string;
   createdAt: number;
   isFavorite?: boolean;
+  /** 'voice' = user's cloned singing voice (Suno Voice); 'style' = persona extracted from a song. */
+  type?: 'voice' | 'style';
 }
 
 export interface RemixData {
@@ -79,7 +81,7 @@ export const useAIStore = create<AIStore>()(
       })),
       setTasks: (newTasks) => set((state) => {
         // Keep pending/generating tasks, merge with new tasks (prefer new ones for completed)
-        const pendingTasks = state.tasks.filter(t => t.status !== 'SUCCESS' && t.status !== 'ERROR');
+        const pendingTasks = state.tasks.filter(t => t.status !== 'SUCCESS' && t.status !== 'FAILED' && (t.status as string) !== 'ERROR');
         const pendingIds = new Set(pendingTasks.map(t => t.taskId));
         const filteredNewTasks = newTasks.filter(t => !pendingIds.has(t.taskId));
         return { tasks: [...pendingTasks, ...filteredNewTasks] };

@@ -1,16 +1,142 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import TrackPlayer, { 
-  Event, 
-  State as TPState, 
-  AppKilledPlaybackBehavior, 
-  Capability, 
-  IOSCategory, 
-  IOSCategoryMode, 
-  IOSCategoryOptions, 
-  PitchAlgorithm 
-} from 'react-native-track-player';
+// --- TEMPORARILY DISABLED FOR EXPO GO ---
+// import TrackPlayer, { 
+//   Event, 
+//   State as TPState, 
+//   AppKilledPlaybackBehavior, 
+//   Capability, 
+//   IOSCategory, 
+//   IOSCategoryMode, 
+//   IOSCategoryOptions, 
+//   PitchAlgorithm 
+// } from 'react-native-track-player';
+let mainPlayer: AudioPlayer | null = null;
+
+// Event bus for the Expo Go mock — lets the listeners at the bottom of this file
+// (song ended → repeat/next, play counting, play/pause state) actually fire.
+const _tpHandlers: Record<string, ((e: any) => void)[]> = {};
+const emitTP = (event: string, payload: any) => {
+  (_tpHandlers[event] || []).forEach(fn => { try { fn(payload); } catch (e) { console.warn('[player] listener error', e); } });
+};
+let mainStatusSub: { remove: () => void } | null = null;
+let sawPlaying = false;
+
+const releaseMainPlayer = () => {
+  try { mainStatusSub?.remove(); } catch {}
+  mainStatusSub = null;
+  if (mainPlayer) {
+    try { mainPlayer.pause(); } catch {}
+    try { mainPlayer.remove(); } catch {}
+  }
+  mainPlayer = null;
+};
+
+/** Mirror expo-audio's real status into the app (end of song, external pauses, progress). */
+const attachStatusListener = (player: AudioPlayer) => {
+  sawPlaying = false;
+  const emitter = player as unknown as {
+    addListener: (e: 'playbackStatusUpdate', cb: (s: { playing: boolean; isBuffering: boolean; didJustFinish: boolean; currentTime: number; duration: number }) => void) => { remove: () => void };
+  };
+  mainStatusSub = emitter.addListener('playbackStatusUpdate', (s) => {
+    if (player !== mainPlayer) return; // stale player
+    
+    // expo-audio sometimes doesn't fire didJustFinish or gets stuck at the end with playing=true
+    const isAtEnd = s.duration > 0 && s.currentTime >= s.duration - 0.3;
+
+    if (s.didJustFinish || isAtEnd) {
+      if (sawPlaying) {
+        sawPlaying = false;
+        try { player.pause(); } catch {}
+        notifyPlaybackState(State.Paused);
+        emitTP(Event.PlaybackQueueEnded, { position: s.currentTime });
+      }
+      return;
+    }
+
+    emitTP(Event.PlaybackProgressUpdated, { position: s.currentTime, duration: s.duration });
+    if (s.playing) {
+      if (!sawPlaying) { sawPlaying = true; notifyPlaybackState(State.Playing); }
+    } else if (sawPlaying && !s.isBuffering) {
+      sawPlaying = false;
+      notifyPlaybackState(State.Paused);
+    }
+  });
+};
+
+// MOCK FOR EXPO GO:
+const TrackPlayer: any = {
+  setupPlayer: async () => {},
+  updateOptions: async () => {},
+  getQueue: async () => [],
+  add: async (tracks: any[]) => {
+    if (tracks && tracks.length > 0 && tracks[0].url) {
+      releaseMainPlayer();
+      try {
+        mainPlayer = createAudioPlayer(tracks[0].url);
+        attachStatusListener(mainPlayer);
+      } catch (e) {
+        console.error("Failed to create audio player:", e);
+      }
+    }
+  },
+  pause: async () => {
+    if (mainPlayer) mainPlayer.pause();
+    notifyPlaybackState(State.Paused);
+  },
+  play: async () => {
+    if (mainPlayer) {
+      // Pressing ▶ on a finished song restarts it instead of doing nothing.
+      const d = mainPlayer.duration || 0;
+      if (d > 0 && (mainPlayer.currentTime || 0) >= d - 0.3) {
+        try { await mainPlayer.seekTo(0); } catch {}
+      }
+      mainPlayer.play();
+    }
+    notifyPlaybackState(State.Playing);
+  },
+  reset: async () => {
+    releaseMainPlayer();
+    notifyPlaybackState(State.None);
+  },
+  setRate: async () => {},
+  getPlaybackState: async () => {
+    if (mainPlayer && mainPlayer.playing) {
+      return { state: TPState.Playing };
+    }
+    return { state: TPState.Paused };
+  },
+  seekTo: async (sec: number) => {
+    // expo-audio's seekTo takes SECONDS
+    if (mainPlayer) mainPlayer.seekTo(sec);
+  },
+  setVolume: async (vol: number) => {
+    if (mainPlayer) mainPlayer.volume = vol;
+  },
+  getProgress: async () => {
+    if (mainPlayer) {
+      // expo-audio already reports currentTime / duration in SECONDS
+      const position = mainPlayer.currentTime || 0;
+      const duration = mainPlayer.duration || 0;
+      return { position, duration: isFinite(duration) ? duration : 0, buffered: 0 };
+    }
+    return { position: 0, duration: 0, buffered: 0 };
+  },
+  addEventListener: (event: string, handler: (e: any) => void) => {
+    (_tpHandlers[event] ||= []).push(handler);
+    return { remove: () => { _tpHandlers[event] = (_tpHandlers[event] || []).filter(h => h !== handler); } };
+  },
+};
+const Event: any = { PlaybackProgressUpdated: 'PlaybackProgressUpdated', PlaybackQueueEnded: 'PlaybackQueueEnded', PlaybackState: 'PlaybackState' };
+const TPState: any = { Playing: 'playing', Paused: 'paused', Stopped: 'stopped', Buffering: 'buffering', Loading: 'loading', Error: 'error', Ready: 'ready', None: 'none' };
+const AppKilledPlaybackBehavior: any = {};
+const Capability: any = {};
+const IOSCategory: any = {};
+const IOSCategoryMode: any = {};
+const IOSCategoryOptions: any = {};
+const PitchAlgorithm: any = {};
+// ---------------------------------------
 
 import { Track } from '../constants';
 import { useOfflineStore } from './offlineStore';
@@ -19,9 +145,9 @@ import { supabase } from '../lib/supabase';
 import * as Haptics from 'expo-haptics';
 import * as React from 'react';
 import { Alert } from 'react-native';
-import { Audio } from 'expo-av';
+import { createAudioPlayer, AudioPlayer } from 'expo-audio';
 
-let backgroundBeatSound: Audio.Sound | null = null;
+let backgroundBeatPlayer: AudioPlayer | null = null;
 
 export enum State {
   None = 'none',
@@ -98,7 +224,7 @@ type PlayerStore = {
   currentTrack: Track | null;
   queue: Track[];
   isShuffled: boolean;
-  repeatOne: boolean;
+  repeatMode: 'off' | 'all' | 'one';
   playbackRate: number;
   sleepTimerMs: number | null;
   sleepTimerInterval: any | null;
@@ -129,6 +255,16 @@ type PlayerStore = {
   reorderQueue: (from: number, to: number) => void;
 };
 
+const getCdnUrl = (url?: string | null): string | undefined => {
+  if (!url) return undefined;
+  if (url.includes('gqxdbwnmnqvtdpxnrgtx.supabase.co')) {
+    return url.replace('gqxdbwnmnqvtdpxnrgtx.supabase.co', 'bongo-cdn.meerkal70.workers.dev');
+  }
+  return url;
+};
+
+
+
 export const usePlayerStore = create<PlayerStore>()(
   persist(
     (set, get) => ({
@@ -136,7 +272,7 @@ export const usePlayerStore = create<PlayerStore>()(
   currentTrack: null,
   queue: [],
   isShuffled: false,
-  repeatOne: false,
+  repeatMode: 'all',
   playbackRate: 1.0,
   sleepTimerMs: null,
   sleepTimerInterval: null,
@@ -149,16 +285,7 @@ export const usePlayerStore = create<PlayerStore>()(
     if (get().isPlayerReady) return;
     try {
       try {
-        const { InterruptionModeIOS, InterruptionModeAndroid } = { InterruptionModeIOS: { DoNotMix: 0 }, InterruptionModeAndroid: { DoNotMix: 0 } };
-        await Audio.setAudioModeAsync({ 
-          allowsRecordingIOS: false,
-          staysActiveInBackground: true, 
-          playsInSilentModeIOS: true,
-          interruptionModeIOS: InterruptionModeIOS.DoNotMix,
-          shouldDuckAndroid: true,
-          interruptionModeAndroid: InterruptionModeAndroid.DoNotMix,
-          playThroughEarpieceAndroid: false
-        });
+        // Audio mode settings are managed via expo-audio config plugin in app.json
       } catch (e) {}
 
       await TrackPlayer.setupPlayer({
@@ -199,7 +326,7 @@ export const usePlayerStore = create<PlayerStore>()(
         try {
           const decryptedUri = await useOfflineStore.getState().getDecryptedUri(persistedTrack.id);
           const offlineCoverUri = decryptedUri ? await useOfflineStore.getState().getOfflineCoverUri(persistedTrack.id) : null;
-          let url = decryptedUri || persistedTrack.audio_url;
+          let url = getCdnUrl(decryptedUri || persistedTrack.audio_url);
           if (url && typeof url === 'string') url = url.replace(/ /g, '%20');
 
           const tpTrack: any = {
@@ -211,7 +338,7 @@ export const usePlayerStore = create<PlayerStore>()(
             pitchAlgorithm: PitchAlgorithm.Linear,
           };
           if (!decryptedUri && persistedTrack.cover_url) {
-            tpTrack.artwork = persistedTrack.cover_url;
+            tpTrack.artwork = getCdnUrl(persistedTrack.cover_url);
           } else if (offlineCoverUri) {
             tpTrack.artwork = 'file://' + offlineCoverUri.replace('file://', '');
           } else {
@@ -245,6 +372,9 @@ export const usePlayerStore = create<PlayerStore>()(
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
     set({ currentTrack: track, queue, hasCountedPlay: false });
     notifyPlaybackState(State.Loading);
+    
+    // EXPO GO MOCK: Instantly trigger play count since we don't have real 30-second progress tracking right now
+    get().markPlayCounted();
 
     if (get().mode === 'host' && get().liveStationId) {
       supabase.from('live_stations').update({
@@ -257,7 +387,7 @@ export const usePlayerStore = create<PlayerStore>()(
 
     const decryptedUri = await useOfflineStore.getState().getDecryptedUri(track.id);
     const offlineCoverUri = decryptedUri ? await useOfflineStore.getState().getOfflineCoverUri(track.id) : null;
-    let url = decryptedUri || track.audio_url;
+    let url = getCdnUrl(decryptedUri || track.audio_url);
 
     if (url && typeof url === 'string') {
         url = url.replace(/ /g, '%20');
@@ -275,7 +405,7 @@ export const usePlayerStore = create<PlayerStore>()(
     // If we are playing a downloaded file, omit the remote artwork URL entirely to prevent crashes.
     // Instead, pass the downloaded local cover if available, or fallback to the bundled app icon!
     if (!decryptedUri && track.cover_url) {
-      tpTrack.artwork = track.cover_url;
+      tpTrack.artwork = getCdnUrl(track.cover_url);
     } else if (offlineCoverUri) {
       tpTrack.artwork = 'file://' + offlineCoverUri.replace('file://', '');
     } else if (!decryptedUri) {
@@ -287,20 +417,20 @@ export const usePlayerStore = create<PlayerStore>()(
     try {
       await TrackPlayer.reset();
 
-      if (backgroundBeatSound) {
-        await backgroundBeatSound.stopAsync();
-        await backgroundBeatSound.unloadAsync();
-        backgroundBeatSound = null;
+      if (backgroundBeatPlayer) {
+        backgroundBeatPlayer.pause();
+        backgroundBeatPlayer.release();
+        backgroundBeatPlayer = null;
       }
 
       if (track.parent_beat_id) {
         try {
           const { data: beatData } = await supabase.from('tracks').select('audio_url').eq('id', track.parent_beat_id).single();
           if (beatData?.audio_url) {
-            const { sound } = await Audio.Sound.createAsync({ uri: beatData.audio_url });
-            backgroundBeatSound = sound;
-            await backgroundBeatSound.setIsLoopingAsync(true);
-            await backgroundBeatSound.playAsync();
+            const cdnBeatUrl = getCdnUrl(beatData.audio_url) || beatData.audio_url;
+            backgroundBeatPlayer = createAudioPlayer(cdnBeatUrl);
+            backgroundBeatPlayer.loop = true;
+            backgroundBeatPlayer.play();
           }
         } catch (e) {
           console.warn('Failed to load parent beat audio', e);
@@ -327,10 +457,10 @@ export const usePlayerStore = create<PlayerStore>()(
     const state = (await TrackPlayer.getPlaybackState()).state;
     if (state === TPState.Playing) {
       await TrackPlayer.pause();
-      if (backgroundBeatSound) await backgroundBeatSound.pauseAsync();
+      if (backgroundBeatPlayer) backgroundBeatPlayer.pause();
     } else {
       await TrackPlayer.play();
-      if (backgroundBeatSound) await backgroundBeatSound.playAsync();
+      if (backgroundBeatPlayer) backgroundBeatPlayer.play();
     }
   },
 
@@ -339,7 +469,7 @@ export const usePlayerStore = create<PlayerStore>()(
     const state = (await TrackPlayer.getPlaybackState()).state;
     if (state === TPState.Playing) {
       await TrackPlayer.pause();
-      if (backgroundBeatSound) await backgroundBeatSound.pauseAsync();
+      if (backgroundBeatPlayer) backgroundBeatPlayer.pause();
     }
   },
 
@@ -352,6 +482,10 @@ export const usePlayerStore = create<PlayerStore>()(
     
     // Auto Play logic for when the queue ends
     if (!isShuffled && currentIdx === queue.length - 1) {
+      if (get().repeatMode === 'all') {
+        await playTrack(queue[0], queue);
+        return;
+      }
       try {
         const { data } = await supabase
           .from('tracks')
@@ -418,7 +552,11 @@ export const usePlayerStore = create<PlayerStore>()(
   },
 
   toggleRepeat: () => {
-    set(s => ({ repeatOne: !s.repeatOne }));
+    set(s => {
+      if (s.repeatMode === 'off') return { repeatMode: 'all' };
+      if (s.repeatMode === 'all') return { repeatMode: 'one' };
+      return { repeatMode: 'off' };
+    });
   },
 
   setSleepTimer: (minutes: number) => {
@@ -514,9 +652,12 @@ export const usePlayerStore = create<PlayerStore>()(
   }
 ));
 
-if (!(global as any)._playerListenersRegistered) {
+// Module-local guard: a global flag survived Fast Refresh and left the fresh
+// module with no listeners registered.
+let _playerListenersRegistered = false;
+if (!_playerListenersRegistered) {
   try {
-    (global as any)._playerListenersRegistered = true;
+    _playerListenersRegistered = true;
     TrackPlayer.addEventListener(Event.PlaybackProgressUpdated, async (event) => {
       const store = usePlayerStore.getState();
       if (event.position > 30 && !store.hasCountedPlay) {
@@ -526,7 +667,7 @@ if (!(global as any)._playerListenersRegistered) {
 
     TrackPlayer.addEventListener(Event.PlaybackQueueEnded, async (event) => {
       const store = usePlayerStore.getState();
-      if (store.repeatOne) {
+      if (store.repeatMode === 'one') {
         await TrackPlayer.seekTo(0);
         await TrackPlayer.play();
       } else {

@@ -3,9 +3,10 @@ import { View, Text, TextInput, TouchableOpacity, StyleSheet, Alert, ScrollView,
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Image } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
+import { useRouter, useFocusEffect } from 'expo-router';
 import { useAuthStore } from '../../store/authStore';
 import { useThemeStore } from '../../store/themeStore';
+import { useLayoutStore } from '../../store/layoutStore';
 
 import { useTranslation } from 'react-i18next';
 import * as ScreenCapture from 'expo-screen-capture';
@@ -21,6 +22,12 @@ export default function ProfileScreen() {
   const { t } = useTranslation();
   const insets = useSafeAreaInsets();
   
+  useFocusEffect(
+    React.useCallback(() => {
+      useLayoutStore.getState().setIsNavVisible(true);
+    }, [])
+  );
+
   const [isImageModalVisible, setIsImageModalVisible] = useState(false);
 
   const handleOpenImage = async () => {
@@ -37,7 +44,13 @@ export default function ProfileScreen() {
         <Ionicons name="person-circle" size={80} color={COLORS.textSecondary} />
         <Text style={styles.noAuthTitle}>{t('profile.my_account')}</Text>
         <Text style={styles.noAuthText}>{t('profile.login_prompt')}</Text>
-        <TouchableOpacity style={styles.loginBtn} onPress={() => router.push('/auth')}>
+        <TouchableOpacity 
+          style={styles.loginBtn} 
+          onPress={() => {
+            useAuthStore.getState().disableOfflineMode();
+            router.push('/auth');
+          }}
+        >
           <Text style={styles.loginBtnText}>{t('profile.login_btn')}</Text>
         </TouchableOpacity>
       </View>
@@ -115,6 +128,7 @@ export default function ProfileScreen() {
       <View style={styles.settingsGroup}>
         {profile.role === 'admin' && (
           <>
+            <MenuRow icon="stats-chart" label="Admin Dashboard: Revenue & Users" iconColor={COLORS.error} onPress={() => router.push('/admin/dashboard')} styles={styles} COLORS={COLORS} />
             <MenuRow icon="settings" label="Admin System Settings" iconColor={COLORS.error} onPress={() => router.push('/admin/settings')} styles={styles} COLORS={COLORS} />
             <MenuRow icon="calendar" label="Admin Panel: Manage Events" iconColor={COLORS.error} onPress={() => router.push('/admin/events')} styles={styles} COLORS={COLORS} />
             <MenuRow icon="shield-checkmark" label="Admin Panel: Manage Tickets" iconColor={COLORS.error} onPress={() => router.push('/admin/tickets')} styles={styles} COLORS={COLORS} />

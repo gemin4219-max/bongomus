@@ -156,7 +156,7 @@ export default function CommentsModal({ visible, onClose, trackId }: CommentsMod
   return (
     <Modal visible={visible} animationType="slide" transparent>
       <View style={styles.container}>
-        <View style={[StyleSheet.absoluteFillObject, { backgroundColor: 'rgba(0,0,0,0.7)' }]} />
+        <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(0,0,0,0.7)' }]} />
         
         <KeyboardAvoidingView 
           behavior={Platform.OS === 'ios' ? 'padding' : undefined}
@@ -169,47 +169,48 @@ export default function CommentsModal({ visible, onClose, trackId }: CommentsMod
             </TouchableOpacity>
           </View>
 
-          {loading ? (
-            <View style={{ padding: 20 }}>
-              {[1, 2, 3, 4].map((i) => (
-                <View key={i} style={styles.commentCard}>
-                  <View style={[styles.avatar, { backgroundColor: 'rgba(255,255,255,0.08)' }]} />
-                  <View style={[styles.commentBody, { backgroundColor: 'rgba(255,255,255,0.03)', height: 60, borderRadius: 16 }]} />
+          <FlatList
+            style={{ flex: 1 }}
+            data={loading ? [] : comments}
+            keyExtractor={item => item.id}
+            contentContainerStyle={{ padding: 20, flexGrow: 1 }}
+            ListEmptyComponent={
+              loading ? (
+                <View style={{ flex: 1 }}>
+                  {[1, 2, 3, 4].map((i) => (
+                    <View key={i} style={styles.commentCard}>
+                      <View style={[styles.avatar, { backgroundColor: 'rgba(255,255,255,0.08)' }]} />
+                      <View style={[styles.commentBody, { backgroundColor: 'rgba(255,255,255,0.03)', height: 60, borderRadius: 16 }]} />
+                    </View>
+                  ))}
                 </View>
-              ))}
-            </View>
-          ) : (
-            <FlatList
-              data={comments}
-              keyExtractor={item => item.id}
-              contentContainerStyle={{ padding: 20 }}
-              ListEmptyComponent={
+              ) : (
                 <View style={styles.emptyState}>
                   <Ionicons name="chatbubbles-outline" size={64} color={COLORS.textTertiary} />
                   <Text style={styles.emptyText}>No comments yet. Be the first to share your thoughts!</Text>
                 </View>
-              }
-              renderItem={({ item }) => (
-                <View style={styles.commentCard}>
-                  <Image 
-                    source={item.profile?.avatar_url ? { uri: item.profile.avatar_url } : require('../assets/icon.png')} 
-                    style={styles.avatar} 
-                  />
-                  <View style={styles.commentBody}>
-                    <View style={styles.commentHeaderRow}>
-                      <Text style={styles.commentName}>{item.profile?.display_name || 'User'}</Text>
-                      {session?.user.id === item.user_id && (
-                        <TouchableOpacity onPress={() => handleDelete(item.id, item.user_id)}>
-                          <Ionicons name="trash-outline" size={16} color={COLORS.error} />
-                        </TouchableOpacity>
-                      )}
-                    </View>
-                    <Text style={styles.commentText}>{item.content}</Text>
+              )
+            }
+            renderItem={({ item }) => (
+              <View style={styles.commentCard}>
+                <Image 
+                  source={item.profile?.avatar_url ? { uri: item.profile.avatar_url } : require('../assets/icon.png')} 
+                  style={styles.avatar} 
+                />
+                <View style={styles.commentBody}>
+                  <View style={styles.commentHeaderRow}>
+                    <Text style={styles.commentName}>{item.profile?.display_name || 'User'}</Text>
+                    {session?.user.id === item.user_id && (
+                      <TouchableOpacity onPress={() => handleDelete(item.id, item.user_id)}>
+                        <Ionicons name="trash-outline" size={16} color={COLORS.error} />
+                      </TouchableOpacity>
+                    )}
                   </View>
+                  <Text style={styles.commentText}>{item.content}</Text>
                 </View>
-              )}
-            />
-          )}
+              </View>
+            )}
+          />
 
           <View style={styles.inputArea}>
             <TextInput

@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, Alert, ScrollView, Platform, Modal } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, Alert, ScrollView, Platform, Modal, TextInput } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { router } from 'expo-router';
 import { Image } from 'expo-image';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
@@ -36,6 +37,116 @@ export default function WorkspaceTab({ openPersonaModal, navigateToTab }: Worksp
   const [extendModalVisible, setExtendModalVisible] = useState(false);
   const [extendAudioId, setExtendAudioId] = useState<string | null>(null);
   const [extendOriginalTitle, setExtendOriginalTitle] = useState('');
+
+  const [publishModalVisible, setPublishModalVisible] = useState(false);
+  const [publishTrack, setPublishTrack] = useState<SunoAudioData | null>(null);
+  const [publishTask, setPublishTask] = useState<AISongTask | null>(null);
+  const [publishTitle, setPublishTitle] = useState('');
+  const [publishGenre, setPublishGenre] = useState('');
+
+  const confirmPublish = async () => {
+    if (!publishTrack || !publishTask) return;
+    const track = publishTrack;
+    const task = publishTask;
+    const customTitle = publishTitle.trim() || track.title || task.title;
+    const customGenre = publishGenre.trim();
+
+    setPublishModalVisible(false);
+    setIsPublishing((prev: any) => ({ ...prev, [track.id]: true }));
+    try {
+      const { session, profile } = useAuthStore.getState();
+      if (!session) throw new Error("Not logged in");
+      
+      let targetAudioUrl = track.audioUrl || (track as any).streamAudioUrl || (track as any).sourceAudioUrl;
+      let targetCoverUrl = track.imageUrl;
+      
+      if (targetAudioUrl?.includes('cdn1.suno.ai') || targetAudioUrl?.includes('tempfile.aiquickdraw.com')) {
+        try {
+          const fetchPromise = task.taskType === 'VOCAL_REMOVAL' ? getVocalRemovalInfo(task.taskId) : getTaskInfo(task.taskId);
+          const timeoutPromise = new Promise<any>((_, reject) => setTimeout(() => reject(new Error('Timeout')), 3000));
+          const info = await Promise.race([fetchPromise, timeoutPromise]);
+          if (info && info.data && info.data.length > 0) {
+            const freshTrack = info.data.find((t: any) => t.id === track.id);
+            if (freshTrack) {
+              targetAudioUrl = freshTrack.audioUrl || freshTrack.streamAudioUrl || freshTrack.sourceAudioUrl;
+              targetCoverUrl = freshTrack.imageUrl;
+            }
+          }
+        } catch (fallbackErr) {
+          console.log("Failed to refresh publish URL, proceeding with original URL:", fallbackErr);
+        }
+      }
+
+      let localAudioUri: string;
+      if (targetAudioUrl?.startsWith('file://')) {
+        localAudioUri = targetAudioUrl;
+      } else {
+        localAudioUri = FileSystem.cacheDirectory + `${track.id}.mp3`;
+        await FileSystem.downloadAsync(targetAudioUrl, localAudioUri);
+      }
+
+      let localCoverUri: string;
+      if (targetCoverUrl?.startsWith('file://')) {
+        localCoverUri = targetCoverUrl;
+      } else {
+        localCoverUri = FileSystem.cacheDirectory + `${track.id}.jpg`;
+        if (targetCoverUrl) {
+          await FileSystem.downloadAsync(targetCoverUrl, localCoverUri);
+        } else {
+          localCoverUri = '';
+        }
+      }
+
+      const audioBase64 = await FileSystem.readAsStringAsync(localAudioUri, { encoding: FileSystem.EncodingType.Base64 });
+      const { error: audioErr } = await supabase.storage.from('audio').upload(`ai_tracks/${track.id}.mp3`, decode(audioBase64), { contentType: 'audio/mpeg', upsert: true });
+      if (audioErr) throw audioErr;
+
+      let coverPublicUrl = '';
+      if (localCoverUri) {
+        const coverBase64 = await FileSystem.readAsStringAsync(localCoverUri, { encoding: FileSystem.EncodingType.Base64 });
+        const { error: coverErr } = await supabase.storage.from('images').upload(`ai_covers/${track.id}.jpg`, decode(coverBase64), { contentType: 'image/jpeg', upsert: true });
+        if (!coverErr) {
+          coverPublicUrl = supabase.storage.from('images').getPublicUrl(`ai_covers/${track.id}.jpg`).data.publicUrl;
+        }
+      }
+
+      const audioPublicUrl = supabase.storage.from('audio').getPublicUrl(`ai_tracks/${track.id}.mp3`).data.publicUrl;
+
+      const { data: existing } = await supabase.from('tracks').select('id').eq('audio_url', audioPublicUrl).maybeSingle();
+
+      if (existing) {
+        const { error: dbErr } = await supabase.from('tracks').update({
+          title: customTitle,
+          genre: customGenre || 'AI',
+          cover_url: coverPublicUrl || existing.cover_url
+        }).eq('id', existing.id);
+        if (dbErr) throw dbErr;
+      } else {
+        const { error: dbErr } = await supabase.from('tracks').insert({
+          user_id: session.user.id,
+          artist_name: profile?.display_name || session.user.user_metadata?.display_name || 'AI Artist',
+          title: customTitle,
+          genre: customGenre || 'AI',
+          audio_url: audioPublicUrl,
+          cover_url: coverPublicUrl,
+          lyrics: track.prompt || null,
+          duration_sec: Math.floor(track.duration || 0),
+          play_count: 0,
+          is_public: true,
+          is_ai: true,
+        });
+        if (dbErr) throw dbErr;
+      }
+
+      useAIStore.getState().updateTrack(task.taskId, track.id, { title: customTitle, isPublished: true } as any);
+
+      Alert.alert("Success", "Song published to your profile!");
+    } catch (e: any) {
+      Alert.alert("Publish Error", e.message);
+    } finally {
+      setIsPublishing((prev: any) => ({ ...prev, [track.id]: false }));
+    }
+  };
 
   const openExtendModal = (audioId: string, title: string) => {
     setExtendAudioId(audioId);
@@ -147,6 +258,13 @@ export default function WorkspaceTab({ openPersonaModal, navigateToTab }: Worksp
               setIsSeparating={setIsSeparating}
               openPersonaModal={openPersonaModal}
               openExtendModal={openExtendModal}
+              onPublishClick={(track, task) => {
+                setPublishTrack(track);
+                setPublishTask(task);
+                setPublishTitle(track.title || task.title);
+                setPublishGenre('');
+                setPublishModalVisible(true);
+              }}
             />
           ))
         )}
@@ -159,11 +277,49 @@ export default function WorkspaceTab({ openPersonaModal, navigateToTab }: Worksp
          originalTitle={extendOriginalTitle}
          onSuccess={handleExtendSuccess}
       />
+
+      <Modal visible={publishModalVisible} transparent animationType="slide">
+        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'center', padding: 20 }}>
+          <View style={{ backgroundColor: '#1E1E1E', padding: 24, borderRadius: 16 }}>
+            <Text style={{ color: '#fff', fontSize: 20, fontWeight: '800', marginBottom: 16 }}>Publish Song</Text>
+            
+            <Text style={{ color: 'rgba(255,255,255,0.7)', marginBottom: 8, fontWeight: '600' }}>Track Name</Text>
+            <TextInput
+              style={{ backgroundColor: 'rgba(255,255,255,0.1)', color: '#fff', padding: 12, borderRadius: 8, marginBottom: 16 }}
+              value={publishTitle}
+              onChangeText={setPublishTitle}
+              placeholder="Enter track name..."
+              placeholderTextColor="rgba(255,255,255,0.4)"
+            />
+
+            <Text style={{ color: 'rgba(255,255,255,0.7)', marginBottom: 8, fontWeight: '600' }}>Genre</Text>
+            <TextInput
+              style={{ backgroundColor: 'rgba(255,255,255,0.1)', color: '#fff', padding: 12, borderRadius: 8, marginBottom: 24 }}
+              value={publishGenre}
+              onChangeText={setPublishGenre}
+              placeholder="e.g. Afrobeats, Bongo Flava..."
+              placeholderTextColor="rgba(255,255,255,0.4)"
+            />
+
+            <View style={{ flexDirection: 'row', justifyContent: 'flex-end', gap: 12 }}>
+              <TouchableOpacity onPress={() => setPublishModalVisible(false)} style={{ padding: 12 }}>
+                <Text style={{ color: '#fff', fontWeight: '600' }}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity 
+                onPress={confirmPublish}
+                style={{ backgroundColor: COLORS.gold, padding: 12, borderRadius: 8, paddingHorizontal: 20 }}
+              >
+                <Text style={{ color: '#000', fontWeight: '700' }}>Publish</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
 
-export function TaskItem({ task, isPublishing, setIsPublishing, isDownloading, setIsDownloading, isGeneratingVideo, setIsGeneratingVideo, isSeparating, setIsSeparating, openPersonaModal, openExtendModal }: { task: AISongTask, isPublishing: any, setIsPublishing: any, isDownloading: any, setIsDownloading: any, isGeneratingVideo: any, setIsGeneratingVideo: any, isSeparating: any, setIsSeparating: any, openPersonaModal: (id: string, taskId: string) => void, openExtendModal: (audioId: string, title: string) => void }) {
+export function TaskItem({ task, isPublishing, setIsPublishing, isDownloading, setIsDownloading, isGeneratingVideo, setIsGeneratingVideo, isSeparating, setIsSeparating, openPersonaModal, openExtendModal, onPublishClick }: { task: AISongTask, isPublishing: any, setIsPublishing: any, isDownloading: any, setIsDownloading: any, isGeneratingVideo: any, setIsGeneratingVideo: any, isSeparating: any, setIsSeparating: any, openPersonaModal: (id: string, taskId: string) => void, openExtendModal: (audioId: string, title: string) => void, onPublishClick: (track: SunoAudioData, task: AISongTask) => void }) {
   const { COLORS } = useThemeStore();
   const styles = getStyles(COLORS);
   const router = useRouter();
@@ -379,10 +535,8 @@ export function TaskItem({ task, isPublishing, setIsPublishing, isDownloading, s
         handleAutoPublish(task.taskId, mappedData, task.title);
       } else if (info.status === 'SENSITIVE_WORD_ERROR') {
         updateTask(task.taskId, 'SENSITIVE_WORD_ERROR');
-        refundCredit();
       } else if (info.status === 'FAILED' || (info.status === 'SUCCESS' && !hasTracks)) {
         updateTask(task.taskId, 'FAILED');
-        refundCredit();
       }
     } catch (e: any) {
       Alert.alert("Error", e.message);
@@ -444,94 +598,6 @@ export function TaskItem({ task, isPublishing, setIsPublishing, isDownloading, s
       router.push('/player');
     } catch (e: any) {
       Alert.alert("Error", e.message);
-    }
-  };
-
-  const handlePublish = async (track: SunoAudioData) => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
-    setIsPublishing((prev: any) => ({ ...prev, [track.id]: true }));
-    try {
-      const { session, profile } = useAuthStore.getState();
-      if (!session) throw new Error("Not logged in");
-      
-      let targetAudioUrl = track.audioUrl || (track as any).streamAudioUrl || (track as any).sourceAudioUrl;
-      let targetCoverUrl = track.imageUrl;
-      
-      if (targetAudioUrl?.includes('cdn1.suno.ai') || targetAudioUrl?.includes('tempfile.aiquickdraw.com')) {
-        try {
-          const fetchPromise = task.taskType === 'VOCAL_REMOVAL' ? getVocalRemovalInfo(task.taskId) : getTaskInfo(task.taskId);
-          const timeoutPromise = new Promise<any>((_, reject) => setTimeout(() => reject(new Error('Timeout')), 3000));
-          const info = await Promise.race([fetchPromise, timeoutPromise]);
-          if (info && info.data && info.data.length > 0) {
-            const freshTrack = info.data.find((t: any) => t.id === track.id);
-            if (freshTrack) {
-              targetAudioUrl = freshTrack.audioUrl || freshTrack.streamAudioUrl || freshTrack.sourceAudioUrl;
-              targetCoverUrl = freshTrack.imageUrl;
-            }
-          }
-        } catch (fallbackErr) {
-          console.log("Failed to refresh publish URL, proceeding with original URL:", fallbackErr);
-        }
-      }
-
-      // If the audio is already a local file (file://), use it directly; otherwise download it
-      let localAudioUri: string;
-      if (targetAudioUrl?.startsWith('file://')) {
-        localAudioUri = targetAudioUrl;
-      } else {
-        localAudioUri = FileSystem.cacheDirectory + `${track.id}.mp3`;
-        await FileSystem.downloadAsync(targetAudioUrl, localAudioUri);
-      }
-
-      // If the cover is already a local file (file://), use it directly; otherwise download it
-      let localCoverUri: string;
-      if (targetCoverUrl?.startsWith('file://')) {
-        localCoverUri = targetCoverUrl;
-      } else {
-        localCoverUri = FileSystem.cacheDirectory + `${track.id}.jpg`;
-        if (targetCoverUrl) {
-          await FileSystem.downloadAsync(targetCoverUrl, localCoverUri);
-        } else {
-          localCoverUri = ''; // no cover
-        }
-      }
-
-
-      const audioBase64 = await FileSystem.readAsStringAsync(localAudioUri, { encoding: FileSystem.EncodingType.Base64 });
-
-      const { error: audioErr } = await supabase.storage.from('audio').upload(`ai_tracks/${track.id}.mp3`, decode(audioBase64), { contentType: 'audio/mpeg' });
-      if (audioErr) throw audioErr;
-
-      let coverPublicUrl = '';
-      if (localCoverUri) {
-        const coverBase64 = await FileSystem.readAsStringAsync(localCoverUri, { encoding: FileSystem.EncodingType.Base64 });
-        const { error: coverErr } = await supabase.storage.from('images').upload(`ai_covers/${track.id}.jpg`, decode(coverBase64), { contentType: 'image/jpeg' });
-        if (!coverErr) {
-          coverPublicUrl = supabase.storage.from('images').getPublicUrl(`ai_covers/${track.id}.jpg`).data.publicUrl;
-        }
-      }
-
-      const audioPublicUrl = supabase.storage.from('audio').getPublicUrl(`ai_tracks/${track.id}.mp3`).data.publicUrl;
-
-      const { error: dbErr } = await supabase.from('tracks').insert({
-        user_id: session.user.id,
-        artist_name: profile?.display_name || session.user.user_metadata?.display_name || 'AI Artist',
-        title: track.title || task.title,
-        audio_url: audioPublicUrl,
-        cover_url: coverPublicUrl,
-        lyrics: track.prompt || null,
-        duration_sec: Math.floor(track.duration || 0),
-        play_count: 0,
-        is_public: true,
-        is_ai: true,
-      });
-      if (dbErr) throw dbErr;
-
-      Alert.alert("Success", "Song published to your profile!");
-    } catch (e: any) {
-      Alert.alert("Publish Error", e.message);
-    } finally {
-      setIsPublishing((prev: any) => ({ ...prev, [track.id]: false }));
     }
   };
 
@@ -663,7 +729,7 @@ export function TaskItem({ task, isPublishing, setIsPublishing, isDownloading, s
                 <View style={styles.durationPill}>
                   <Text style={styles.durationText}>{formatDuration(track.duration || 0)}</Text>
                 </View>
-                {idx === 0 && <View style={styles.newDot} />}
+
               </View>
             </TouchableOpacity>
             
@@ -701,7 +767,7 @@ export function TaskItem({ task, isPublishing, setIsPublishing, isDownloading, s
                 </View>
 
                 <MenuAction icon="play" label="Play Track" onPress={() => { setMenuVisible(false); handlePlay(menuTrack); }} COLORS={COLORS} />
-                <MenuAction icon="cloud-upload" label="Publish to Profile" onPress={() => { setMenuVisible(false); handlePublish(menuTrack); }} loading={isPublishing[menuTrack.id]} COLORS={COLORS} />
+                <MenuAction icon="cloud-upload" label="Publish to Profile" onPress={() => { setMenuVisible(false); onPublishClick(menuTrack, task); }} loading={isPublishing[menuTrack.id]} COLORS={COLORS} />
                 <MenuAction icon="download" label="Download Audio" onPress={() => { handleDownload(menuTrack); }} loading={isDownloading[menuTrack.id]} COLORS={COLORS} />
                 
                 <MenuAction icon="cut" label="Separate Vocals" onPress={() => { setMenuVisible(false); handleSeparateVocals(menuTrack); }} loading={isSeparating[menuTrack.id]} COLORS={COLORS} />

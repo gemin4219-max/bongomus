@@ -216,7 +216,7 @@ export default function HomeScreen() {
         supabase.from('live_stations').select('*, profiles(display_name, username, avatar_url)').eq('status', 'live').order('listener_count', { ascending: false }).limit(10),
         // Fetch Admin-driven featured playlists with tracks
         supabase.from('playlists')
-          .select('id, title, subtitle, cover_url, playlist_tracks(tracks(*, profile:profiles!tracks_user_id_fkey(*)))')
+          .select('id, title, cover_url, playlist_tracks(tracks(*, profile:profiles!tracks_user_id_fkey(*)))')
           .eq('is_featured', true)
           .order('created_at', { ascending: false }),
         supabase.from('genres').select('*').order('created_at', { ascending: true })
@@ -226,7 +226,7 @@ export default function HomeScreen() {
       
       // Shuffle the large pools and select a subset for the day
       if (featuredRes.data) setFeatured(getDailySelection(featuredRes.data as Track[], 7));
-      if (newRes.data) setNewReleases(getDailySelection(newRes.data as Track[], 10));
+      if (newRes.data) setNewReleases(newRes.data.slice(0, 15) as Track[]);
       if (artistsRes.data) setArtists(getDailySelection(artistsRes.data as Profile[], 10));
       if (albumsRes.data) setAlbums(getDailySelection(albumsRes.data as Playlist[], 10));
       if (myPlaylistsRes.data) setMyPlaylists(myPlaylistsRes.data as Playlist[]); // Keep original
@@ -260,7 +260,7 @@ export default function HomeScreen() {
         const { data: recentHistory } = await supabase.from('listening_history')
           .select('track_id')
           .eq('user_id', session.user.id)
-          .order('created_at', { ascending: false })
+          .order('listened_at', { ascending: false })
           .limit(30);
           
         if (recentHistory && recentHistory.length > 0) {
@@ -772,6 +772,37 @@ export default function HomeScreen() {
                       </TouchableOpacity>
                     ))}
                   </View>
+                ))}
+              </ScrollView>
+            </View>
+          )}
+
+          {/* New Drop Out */}
+          {displayNewReleases.length > 0 && (
+            <View style={styles.section}>
+              <View style={styles.sectionHeader}>
+                <Text style={styles.sectionTitle}>New Drop Out</Text>
+                <TouchableOpacity onPress={() => router.push('/view-all?type=new-releases')}><Text style={styles.seeAll}>See All</Text></TouchableOpacity>
+              </View>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingLeft: 16 }}>
+                {displayNewReleases.slice().reverse().map(track => (
+                  <TouchableOpacity key={track.id + '_drop'} style={styles.sunoCard} onPress={() => { playTrack(track, displayNewReleases); router.push('/player'); }}>
+                    <View style={styles.sunoCoverWrap}>
+                      <Image source={{ uri: track.cover_url || undefined }} style={styles.sunoCover} />
+                      <View style={styles.sunoDurationBadge}>
+                        <Text style={styles.sunoDurationText}>{formatTime(track.duration_sec)}</Text>
+                      </View>
+                      <TouchableOpacity style={styles.sunoEllipsisBtn}>
+                        <Ionicons name="ellipsis-horizontal" size={24} color="#fff" />
+                      </TouchableOpacity>
+                    </View>
+                    <Text style={styles.sunoTitle} numberOfLines={1}>{track.title}</Text>
+                    <Text style={styles.sunoGenre} numberOfLines={1}>{track.genre || 'Latest'}</Text>
+                    <View style={styles.sunoStats}>
+                      <Ionicons name="play" size={12} color="rgba(255,255,255,0.5)" style={{ marginRight: 4 }} />
+                      <Text style={styles.sunoStatText}>{formatCount(track.play_count)}</Text>
+                    </View>
+                  </TouchableOpacity>
                 ))}
               </ScrollView>
             </View>

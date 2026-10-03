@@ -63,7 +63,7 @@ export default function LiveRadioTuner({ station, onPress }: LiveRadioTunerProps
         colors={['rgba(212,175,55,0.2)', 'rgba(0,0,0,0.8)']} 
         start={{ x: 0, y: 0 }} 
         end={{ x: 1, y: 1 }} 
-        style={StyleSheet.absoluteFillObject} 
+        style={StyleSheet.absoluteFill} 
       />
 
       <BlurView intensity={70} tint="dark" style={styles.glassPanel}>
