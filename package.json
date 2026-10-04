@@ -41,6 +41,7 @@
     "isomorphic-git": "^1.42.4",
     "patch-package": "^8.0.1",
     "react": "19.2.3",
+    "react-error-boundary": "^6.1.6",
     "react-i18next": "^17.0.8",
     "react-native": "0.86.3",
     "react-native-draggable-flatlist": "^4.0.3",

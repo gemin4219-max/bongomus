@@ -4,6 +4,16 @@ import { LogBox, Alert } from 'react-native';
 import * as SplashScreen from 'expo-splash-screen';
 import * as ScreenCapture from 'expo-screen-capture';
 
+import { setJSExceptionHandler } from 'react-native-exception-handler';
+// Fallback
+if (typeof ErrorUtils !== 'undefined') {
+  ErrorUtils.setGlobalHandler((err, isFatal) => {
+    console.error('GLOBAL JS ERROR:', err);
+    Alert.alert('Fatal JS Error', err ? err.message : 'Unknown error');
+  });
+}
+
+
 
 // Crash reporting: catches JS errors and native iOS/Android crashes.
 // Native crashes are sent on the next app launch.
@@ -25,6 +35,8 @@ try {
 
 
 import { Stack, useRouter, useSegments } from 'expo-router';
+import { View, Text, ScrollView } from 'react-native';
+import { ErrorBoundary } from 'react-error-boundary';
 import { StatusBar } from 'expo-status-bar';
 import { useAuthStore } from '../store/authStore';
 import { usePlayerStore } from '../store/playerStore';
@@ -131,6 +143,15 @@ function RootLayout() {
 
   return (
     <GestureHandlerRootView style={styles.root}>
+      <ErrorBoundary fallbackRender={({error}) => (
+        <View style={{flex: 1, justifyContent: 'center', alignItems: 'center', padding: 20, backgroundColor: '#0A0A0F', marginTop: 50}}>
+          <Text style={{color: 'red', fontSize: 18, fontWeight: 'bold', marginBottom: 10}}>APP CRASHED!</Text>
+          <ScrollView style={{maxHeight: 400}}>
+            <Text style={{color: 'white'}}>{error.message}</Text>
+            <Text style={{color: 'gray', fontSize: 10, marginTop: 10}}>{error.stack}</Text>
+          </ScrollView>
+        </View>
+      )}>
       <ThemeProvider value={customTheme}>
         <StatusBar style="light" backgroundColor="#0A0A0F" />
         <Stack screenOptions={{ headerShown: false, headerBackTitleVisible: false, headerBackTitle: ' ', contentStyle: { backgroundColor: '#0A0A0F' }, animation: 'fade' }}>
@@ -156,6 +177,7 @@ function RootLayout() {
         <AnimatedSplash isReady={fontsLoaded && !isLoading} />
         <ThemeEffects />
       </ThemeProvider>
+      </ErrorBoundary>
     </GestureHandlerRootView>
   );
 }
