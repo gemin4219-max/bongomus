@@ -15,6 +15,7 @@ type AuthStore = {
   signUp: (email: string, password: string, username: string, displayName: string, role: string) => Promise<string | null>;
   signOut: () => Promise<void>;
   fetchProfile: (userId?: string) => Promise<void>;
+  signInAnonymously: () => Promise<string | null>;
   enableOfflineMode: () => void;
   disableOfflineMode: () => void;
 };
@@ -78,6 +79,13 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
     set({ isOfflineMode: false });
   },
 
+  signInAnonymously: async () => {
+    set({ isLoading: true });
+    const { error } = await supabase.auth.signInAnonymously();
+    set({ isLoading: false });
+    return error?.message ?? null;
+  },
+
   signIn: async (email, password) => {
     set({ isLoading: true });
     const { error } = await supabase.auth.signInWithPassword({ email, password });
@@ -100,13 +108,30 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
       return "Jina hili la mtumiaji (Username) tayari linatumika. Tafadhali chagua jingine.";
     }
 
-    const { data, error } = await supabase.auth.signUp({
-      email,
-      password,
-      options: {
+    let data, error;
+    const isAnon = get().session?.user?.is_anonymous;
+
+    if (isAnon) {
+      // Upgrade anonymous user to a permanent account
+      const res = await supabase.auth.updateUser({
+        email,
+        password,
         data: { username, display_name: displayName },
-      },
-    });
+      });
+      data = res.data;
+      error = res.error;
+    } else {
+      // Normal signup
+      const res = await supabase.auth.signUp({
+        email,
+        password,
+        options: {
+          data: { username, display_name: displayName },
+        },
+      });
+      data = res.data;
+      error = res.error;
+    }
     
     if (error) { 
       set({ isLoading: false }); 

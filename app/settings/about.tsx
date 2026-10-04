@@ -1,7 +1,7 @@
 import React from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Linking } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { GlassView as BlurView } from '@/components/GlassView';
+
 import { Stack, useRouter } from 'expo-router';
 import { useThemeStore } from '../../store/themeStore';
 
@@ -15,7 +15,7 @@ export default function AboutSettings() {
   const router = useRouter();
 
   return (
-    <BlurView intensity={70} tint="dark" style={{ flex: 1 }}>
+    <View style={{ flex: 1, backgroundColor: COLORS.black }}>
       <SafeAreaView style={{ flex: 1 }} edges={['top']}>
         <Stack.Screen options={{ headerShown: false }} />
         <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingTop: 60, paddingBottom: 12 }}>
@@ -45,7 +45,7 @@ export default function AboutSettings() {
       </View>
         </ScrollView>
       </SafeAreaView>
-    </BlurView>
+    </View>
   );
 }
 

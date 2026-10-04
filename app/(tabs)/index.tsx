@@ -142,6 +142,7 @@ export default function HomeScreen() {
 
   const handleScroll = (event: any) => {
     const currentY = event.nativeEvent.contentOffset.y;
+    scrollY.setValue(currentY);
     const navVisible = useLayoutStore.getState().isNavVisible;
     
     // Always show at top
@@ -492,7 +493,7 @@ export default function HomeScreen() {
       <View style={styles.container}>
         {/* Header — always visible */}
         <View style={{ position: 'absolute', top: 0, left: 0, right: 0, zIndex: 100, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingTop: Platform.OS === 'ios' ? 60 : 40, paddingBottom: 16, gap: 16, backgroundColor: 'rgba(15,15,15,0.95)' }}>
-          <Text style={{ color: '#fff', fontSize: 28, fontWeight: '800', flex: 1 }}>Good Music</Text>
+          <Text style={{ color: '#fff', fontSize: 28, fontWeight: '800', flex: 1 }}>Get Inspired</Text>
           <View style={{ width: 44, height: 44, borderRadius: 22, backgroundColor: 'rgba(255,255,255,0.08)', justifyContent: 'center', alignItems: 'center' }}>
             <Ionicons name="notifications" size={20} color="#fff" />
           </View>
@@ -587,7 +588,7 @@ export default function HomeScreen() {
   };
 
   const headerOpacity = scrollY.interpolate({
-    inputRange: [0, 200],
+    inputRange: [0, 80],
     outputRange: [0, 1],
     extrapolate: 'clamp',
   });
@@ -632,10 +633,8 @@ export default function HomeScreen() {
     <View style={styles.container}>
       {/* Sticky Glassmorphic Header - Animated */}
       <Animated.View style={[styles.headerRow, { transform: [{ translateY: headerTranslateY }] }]}>
-        <BlurView intensity={80} tint="dark" style={[{ width: '100%', flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingTop: Platform.OS === 'ios' ? 60 : 40, paddingBottom: 16 }]}>
-          <View style={{ flex: 1, justifyContent: 'center' }}>
-            <Text style={{ color: '#fff', fontSize: 28, fontWeight: '800', marginLeft: 4 }}>Good Music</Text>
-          </View>
+        <View style={[{ width: '100%', flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingTop: Platform.OS === 'ios' ? 60 : 40, paddingBottom: 16, backgroundColor: 'rgba(15,15,15,0.95)' }]}>
+          <Animated.View style={{ flex: 1, justifyContent: 'center', opacity: headerOpacity }}><Text style={{ color: '#fff', fontSize: 24, fontWeight: '800', marginLeft: 4 }}>Get Inspired</Text></Animated.View>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
             <TouchableOpacity style={styles.bellBtn} onPress={() => router.push('/discover')}>
               <Ionicons name="compass-outline" size={22} color="#fff" />
@@ -644,7 +643,7 @@ export default function HomeScreen() {
               <Ionicons name="notifications" size={20} color="#fff" />
             </TouchableOpacity>
           </View>
-        </BlurView>
+        </View>
       </Animated.View>
 
       <View style={{ flex: 1 }}>
@@ -663,12 +662,10 @@ export default function HomeScreen() {
             />
           }
         >
+          {/* AI Studio CTA Banner (Always at top) */}
+          <AiStudioBanner onPress={(type) => router.push({ pathname: '/ai-studio', params: { type } })} />
+
           <DailyShuffler>
-
-
-
-            {/* AI Studio CTA Banner */}
-            <AiStudioBanner onPress={() => router.push('/ai-studio')} />
 
             {/* Staff Picks Section */}
             {staffPicksChunks.length > 0 && (
@@ -1188,3 +1185,5 @@ const getStyles = (COLORS: any) => StyleSheet.create({
     fontSize: 13,
   },
 });
+
+

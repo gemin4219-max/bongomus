@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { View, Text, TextInput, TouchableOpacity, StyleSheet, Alert, ActivityIndicator, ScrollView } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { GlassView as BlurView } from '@/components/GlassView';
+
 import { Ionicons } from '@expo/vector-icons';
 import { Stack, useRouter } from 'expo-router';
 import { useAuthStore } from '../../store/authStore';
@@ -74,7 +74,7 @@ export default function EditProfileSettings() {
   };
 
   return (
-    <BlurView intensity={70} tint="dark" style={{ flex: 1 }}>
+    <View style={{ flex: 1, backgroundColor: COLORS.black }}>
       <SafeAreaView style={{ flex: 1 }} edges={['top']}>
         <Stack.Screen options={{ headerShown: false }} />
         <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingTop: 60, paddingBottom: 12 }}>
@@ -121,7 +121,7 @@ export default function EditProfileSettings() {
       )}
         </ScrollView>
       </SafeAreaView>
-    </BlurView>
+    </View>
   );
 }
 

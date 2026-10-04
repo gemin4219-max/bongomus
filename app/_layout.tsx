@@ -8,7 +8,7 @@ import * as Sentry from '@sentry/react-native';
 // Native crashes are sent on the next app launch.
 try {
   Sentry.init({
-    dsn: 'https://c552ff30635ec7a2ab7a9e794f0f8bba@o4512188043493376.ingest.de.sentry.io/4512188048212048',
+    dsn: process.env.EXPO_PUBLIC_SENTRY_DSN || '',
     debug: false,
     enableNative: true,
     enableNativeCrashHandling: true,
@@ -110,7 +110,14 @@ function RootLayout() {
     // Defer the routing to ensure the navigation container is fully mounted
     setTimeout(() => {
       if (!session && !inAuthGroup && !isOfflineMode) {
-        router.replace('/auth');
+        // Auto sign in as Guest
+        useAuthStore.getState().signInAnonymously().then((err) => {
+          if (err) {
+            // Fallback to offline mode to prevent infinite loop if DB fails
+            useAuthStore.getState().enableOfflineMode();
+          }
+          router.replace('/');
+        });
       } else if ((session || isOfflineMode) && inAuthGroup) {
         router.replace('/');
       }

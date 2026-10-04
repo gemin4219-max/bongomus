@@ -29,6 +29,7 @@ export default function ProfileScreen() {
   );
 
   const [isImageModalVisible, setIsImageModalVisible] = useState(false);
+  const [isWarningDismissed, setIsWarningDismissed] = useState(false);
 
   const handleOpenImage = async () => {
     setIsImageModalVisible(true);
@@ -57,12 +58,18 @@ export default function ProfileScreen() {
     );
   }
 
+  const isAnonymous = session?.user?.is_anonymous;
+
   const handleSignOut = () => {
     Alert.alert(t('profile.sign_out'), t('profile.confirm_sign_out'), [
       { text: t('profile.no'), style: 'cancel' },
       { text: t('profile.yes_sign_out'), style: 'destructive', onPress: () => { signOut(); } },
     ]);
   };
+
+  const displayUsername = isAnonymous 
+    ? `@bongo_guest_${profile?.id?.substring(0, 4)}` 
+    : `@${profile?.username}`;
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={{ paddingBottom: 160 }} showsVerticalScrollIndicator={false}>
@@ -85,12 +92,43 @@ export default function ProfileScreen() {
           )}
         </TouchableOpacity>
         <Text style={styles.displayName}>{profile.display_name}</Text>
-        <Text style={styles.username}>@{profile.username}</Text>
-        {profile.is_verified && (
+        <Text style={styles.username}>{displayUsername}</Text>
+        {profile.is_verified && !isAnonymous && (
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, marginBottom: 4 }}>
             <Ionicons name="checkmark-circle" size={14} color={COLORS.gold} />
             <Text style={styles.verified}>{t('profile.verified')}</Text>
           </View>
+        )}
+        
+        {isAnonymous && !isWarningDismissed && (
+          <View style={{ backgroundColor: 'rgba(255, 60, 60, 0.1)', borderWidth: 1, borderColor: 'rgba(255, 60, 60, 0.3)', borderRadius: 16, padding: 16, marginTop: 16, alignItems: 'center' }}>
+            <TouchableOpacity 
+              style={{ position: 'absolute', top: 12, right: 12 }} 
+              onPress={() => setIsWarningDismissed(true)}
+            >
+              <Ionicons name="close" size={24} color={COLORS.textSecondary} />
+            </TouchableOpacity>
+            <Ionicons name="warning" size={24} color={COLORS.error || '#ff4444'} style={{ marginBottom: 8 }} />
+            <Text style={{ color: COLORS.textPrimary, fontSize: 15, fontWeight: '700', textAlign: 'center', marginBottom: 4 }}>Don't lose your music & credits!</Text>
+            <Text style={{ color: COLORS.textSecondary, fontSize: 13, textAlign: 'center', marginBottom: 16, lineHeight: 20 }}>
+              You are using a temporary Guest account. If you delete the app or change phones, you will lose your credits, playlists, and history permanently.
+            </Text>
+            <TouchableOpacity 
+              style={{ backgroundColor: COLORS.gold, paddingHorizontal: 24, paddingVertical: 12, borderRadius: 20, width: '100%', alignItems: 'center' }}
+              onPress={() => router.push('/auth')}
+            >
+              <Text style={{ color: COLORS.black, fontWeight: '800', fontSize: 14 }}>Claim Your Account Now</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
+        {isAnonymous && isWarningDismissed && (
+          <TouchableOpacity 
+            style={{ backgroundColor: COLORS.gold, paddingHorizontal: 16, paddingVertical: 8, borderRadius: 20, marginTop: 12 }}
+            onPress={() => router.push('/auth')}
+          >
+            <Text style={{ color: COLORS.black, fontWeight: '800', fontSize: 14 }}>Claim your account</Text>
+          </TouchableOpacity>
         )}
 
         <View style={styles.statsRow}>
@@ -144,7 +182,7 @@ export default function ProfileScreen() {
             <MenuRow icon="checkmark-circle" label="Get Verified" iconColor={COLORS.gold} onPress={() => router.push('/settings/verify')} styles={styles} COLORS={COLORS} />
           </>
         )}
-        {profile.role !== 'artist' && profile.role !== 'admin' && (
+        {profile.role !== 'artist' && profile.role !== 'admin' && !isAnonymous && (
           <MenuRow icon="star" label="Become an Artist" iconColor={COLORS.gold} onPress={() => router.push('/settings/become-artist')} styles={styles} COLORS={COLORS} />
         )}
         <MenuRow icon="bar-chart" label="Bongo Wrapped (Stats)" iconColor={COLORS.gold} onPress={() => router.push('/stats')} styles={styles} COLORS={COLORS} />
@@ -167,9 +205,11 @@ export default function ProfileScreen() {
         <MenuRow icon="information-circle-outline" label={t('profile.about')} iconColor={COLORS.textSecondary} onPress={() => router.push('/settings/about')} isLast styles={styles} COLORS={COLORS} />
       </View>
 
-      <View style={[styles.settingsGroup, { marginBottom: 40, borderColor: 'rgba(255, 59, 48, 0.3)' }]}>
-        <MenuRow icon="log-out-outline" label={t('profile.sign_out')} iconColor={COLORS.error} onPress={handleSignOut} isLast styles={styles} COLORS={COLORS} />
-      </View>
+      {!isAnonymous && (
+        <View style={[styles.settingsGroup, { marginBottom: 40, borderColor: 'rgba(255, 59, 48, 0.3)' }]}>
+          <MenuRow icon="log-out-outline" label={t('profile.sign_out')} iconColor={COLORS.error} onPress={handleSignOut} isLast styles={styles} COLORS={COLORS} />
+        </View>
+      )}
 
       {/* Full Screen Image Modal */}
       <Modal visible={isImageModalVisible} transparent={true} animationType="fade" onRequestClose={handleCloseImage}>

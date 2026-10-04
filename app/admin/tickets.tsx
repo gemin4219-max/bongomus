@@ -12,6 +12,7 @@ type Ticket = {
   user_id: string;
   subject: string;
   message: string;
+  admin_reply?: string;
   status: string;
   created_at: string;
   profile: {
@@ -29,6 +30,7 @@ export default function AdminTicketsScreen() {
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [filter, setFilter] = useState<'open' | 'closed'>('open');
+  const [replyText, setReplyText] = useState<{ [key: string]: string }>({});
 
   useFocusEffect(
     useCallback(() => {
@@ -64,26 +66,37 @@ export default function AdminTicketsScreen() {
     loadTickets();
   };
 
-  const handleResolve = async (ticketId: string) => {
-    Alert.alert('Resolve Ticket', 'Mark this ticket as closed?', [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Close Ticket',
-        style: 'default',
-        onPress: async () => {
-          const { error } = await supabase
-            .from('support_tickets')
-            .update({ status: 'closed' })
-            .eq('id', ticketId);
+  const handleReplyAndResolve = async (ticketId: string) => {
+    const text = replyText[ticketId] || '';
+    
+    Alert.alert(
+      text ? 'Send Reply & Resolve' : 'Resolve Ticket',
+      text ? 'Are you sure you want to send this reply and close the ticket?' : 'Mark this ticket as closed without a reply?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: text ? 'Send & Close' : 'Close Ticket',
+          style: 'default',
+          onPress: async () => {
+            const updates: any = { status: 'closed' };
+            if (text.trim()) updates.admin_reply = text.trim();
+            
+            const { error } = await supabase
+              .from('support_tickets')
+              .update(updates)
+              .eq('id', ticketId);
 
-          if (error) {
-            Alert.alert('Error', error.message);
-          } else {
-            setTickets(tickets.filter(t => t.id !== ticketId));
+            if (error) {
+              Alert.alert('Error', error.message);
+            } else {
+              setTickets(tickets.filter(t => t.id !== ticketId));
+              setReplyText(prev => { const next = {...prev}; delete next[ticketId]; return next; });
+              Alert.alert('Success', 'Ticket updated successfully.');
+            }
           }
         }
-      }
-    ]);
+      ]
+    );
   };
 
   if (!session) return null;
@@ -146,11 +159,28 @@ export default function AdminTicketsScreen() {
               <Text style={styles.subject}>{item.subject}</Text>
               <Text style={styles.message}>{item.message}</Text>
 
+              {item.admin_reply && (
+                <View style={styles.adminReplyBox}>
+                  <Text style={styles.adminReplyTitle}>Your Reply:</Text>
+                  <Text style={styles.adminReplyText}>{item.admin_reply}</Text>
+                </View>
+              )}
+
               {item.status === 'open' && (
-                <TouchableOpacity style={styles.resolveBtn} onPress={() => handleResolve(item.id)}>
-                  <Ionicons name="checkmark-circle" size={18} color={COLORS.black} />
-                  <Text style={styles.resolveBtnText}>Mark as Resolved</Text>
-                </TouchableOpacity>
+                <View style={styles.replyContainer}>
+                  <TextInput
+                    style={styles.replyInput}
+                    placeholder="Type a reply to the user... (Optional)"
+                    placeholderTextColor={COLORS.textTertiary}
+                    value={replyText[item.id] || ''}
+                    onChangeText={text => setReplyText(prev => ({ ...prev, [item.id]: text }))}
+                    multiline
+                  />
+                  <TouchableOpacity style={styles.resolveBtn} onPress={() => handleReplyAndResolve(item.id)}>
+                    <Ionicons name={replyText[item.id] ? "send" : "checkmark-circle"} size={18} color={COLORS.black} />
+                    <Text style={styles.resolveBtnText}>{replyText[item.id] ? "Send Reply & Resolve" : "Mark as Resolved"}</Text>
+                  </TouchableOpacity>
+                </View>
               )}
             </View>
           )}
@@ -195,6 +225,11 @@ const getStyles = (COLORS: any) => StyleSheet.create({
   badgeTextClosed: { color: '#4ade80' },
   subject: { color: COLORS.textPrimary, fontSize: 16, fontWeight: '800', marginBottom: 8 },
   message: { color: COLORS.textSecondary, fontSize: 14, lineHeight: 22 },
-  resolveBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: COLORS.gold, padding: 12, borderRadius: 8, marginTop: 16 },
+  replyContainer: { marginTop: 16 },
+  replyInput: { backgroundColor: 'rgba(0,0,0,0.2)', borderWidth: 1, borderColor: COLORS.divider, borderRadius: 12, padding: 12, color: COLORS.textPrimary, fontSize: 14, minHeight: 80, textAlignVertical: 'top', marginBottom: 12 },
+  resolveBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: COLORS.gold, padding: 12, borderRadius: 8 },
   resolveBtnText: { color: COLORS.black, fontWeight: '700', fontSize: 14 },
+  adminReplyBox: { marginTop: 12, padding: 12, backgroundColor: 'rgba(255, 215, 0, 0.1)', borderRadius: 8, borderWidth: 1, borderColor: 'rgba(255, 215, 0, 0.3)' },
+  adminReplyTitle: { color: COLORS.gold, fontSize: 12, fontWeight: '800', marginBottom: 4, textTransform: 'uppercase' },
+  adminReplyText: { color: COLORS.textPrimary, fontSize: 14, lineHeight: 22 },
 });

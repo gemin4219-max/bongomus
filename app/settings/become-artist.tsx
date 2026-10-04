@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, Alert, ScrollView, ActivityIndicator } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { GlassView as BlurView } from '@/components/GlassView';
+
 import { Stack, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { supabase } from '../../lib/supabase';
@@ -95,7 +95,7 @@ export default function BecomeArtistScreen() {
 
   if (profile?.role === 'artist') {
     return (
-      <BlurView intensity={70} tint="dark" style={{ flex: 1 }}>
+      <View style={{ flex: 1, backgroundColor: COLORS.black }}>
         <SafeAreaView style={{ flex: 1 }} edges={['top']}>
           <Stack.Screen options={{ headerShown: false }} />
           <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingTop: 60, paddingBottom: 12 }}>
@@ -113,23 +113,21 @@ export default function BecomeArtistScreen() {
             </TouchableOpacity>
           </View>
         </SafeAreaView>
-      </BlurView>
+      </View>
     );
   }
 
   return (
-    <BlurView intensity={70} tint="dark" style={{ flex: 1 }}>
+    <View style={{ flex: 1, backgroundColor: COLORS.black }}>
       <SafeAreaView style={{ flex: 1 }} edges={['top']}>
-        <Stack.Screen options={{ headerShown: false }} />
-        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingTop: 60, paddingBottom: 12 }}>
-          <TouchableOpacity onPress={() => router.back()} style={{ padding: 4, marginLeft: -4 }}>
-            <Ionicons name="chevron-back" size={28} color={COLORS.textPrimary} />
-          </TouchableOpacity>
-          <Text style={{ color: COLORS.textPrimary, fontSize: 18, fontWeight: '700' }}>Become an Artist</Text>
-          <View style={{ width: 28 }} />
-        </View>
-
-        <ScrollView contentContainerStyle={styles.content}>
+        <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingBottom: 12 }}>
+            <TouchableOpacity onPress={() => router.back()} style={{ padding: 4, marginLeft: -4 }}>
+              <Ionicons name="chevron-back" size={28} color={COLORS.textPrimary} />
+            </TouchableOpacity>
+            <Text style={{ color: COLORS.textPrimary, fontSize: 18, fontWeight: '700' }}>Become an Artist</Text>
+            <View style={{ width: 28 }} />
+          </View>
           <View style={styles.iconContainer}>
             <Ionicons name="mic" size={60} color={COLORS.gold} />
             <Text style={styles.title}>Upload Your Music</Text>
@@ -183,17 +181,23 @@ export default function BecomeArtistScreen() {
           </TouchableOpacity>
 
           <TouchableOpacity 
-            style={[styles.submitBtn, (!agreed || loading) && styles.submitBtnDisabled]} 
+            style={[styles.submitBtn, (!agreed || !avatarUrl || loading) && styles.submitBtnDisabled]} 
             onPress={handleUpgrade}
-            disabled={!agreed || loading}
+            disabled={!agreed || !avatarUrl || loading}
           >
             <Text style={styles.submitBtnText}>
-              {loading ? 'Upgrading...' : 'Upgrade My Account'}
+              {loading 
+                ? 'Upgrading...' 
+                : !avatarUrl 
+                  ? 'Upload Photo to Continue'
+                  : !agreed 
+                    ? 'Agree to Terms'
+                    : 'Upgrade My Account'}
             </Text>
           </TouchableOpacity>
         </ScrollView>
       </SafeAreaView>
-    </BlurView>
+    </View>
   );
 }
 

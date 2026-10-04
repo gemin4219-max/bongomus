@@ -1,6 +1,6 @@
 import React from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, ScrollView } from 'react-native';
-import { GlassView as BlurView } from '@/components/GlassView';
+
 import { Ionicons } from '@expo/vector-icons';
 import { useThemeStore } from '../../store/themeStore';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -20,7 +20,7 @@ export default function LanguageSettings() {
   };
 
   return (
-    <BlurView intensity={70} tint="dark" style={{ flex: 1 }}>
+    <View style={{ flex: 1, backgroundColor: COLORS.black }}>
       <SafeAreaView style={{ flex: 1 }} edges={['top']}>
         <Stack.Screen options={{ headerShown: false }} />
         <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingTop: 60, paddingBottom: 12 }}>
@@ -44,7 +44,7 @@ export default function LanguageSettings() {
       </TouchableOpacity>
         </ScrollView>
       </SafeAreaView>
-    </BlurView>
+    </View>
   );
 }
 

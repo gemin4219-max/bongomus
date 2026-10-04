@@ -1,175 +1,272 @@
-import React, { useEffect, useRef } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Animated, Easing } from 'react-native';
-import { GlassView as BlurView } from '@/components/GlassView';
+import React, { useState, useEffect, useRef } from 'react';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Dimensions } from 'react-native';
+import { Image } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 
 interface AiStudioBannerProps {
-  onPress: () => void;
+  onPress: (type: string) => void;
 }
 
+const { width } = Dimensions.get('window');
+
 export default function AiStudioBanner({ onPress }: AiStudioBannerProps) {
-  const pulseAnim = useRef(new Animated.Value(1)).current;
+  // 3 hours, 26 mins, 7 secs in seconds = 12367
+  const [timeLeft, setTimeLeft] = useState(12367);
+  const totalTime = 86400; // 24 hours total duration for the progress bar
+  
+  const scrollViewRef = useRef<ScrollView>(null);
+  const scrollIndex = useRef(0);
+  const totalCards = 6;
+  const snapInterval = 172;
 
   useEffect(() => {
-    Animated.loop(
-      Animated.sequence([
-        Animated.timing(pulseAnim, {
-          toValue: 1.05,
-          duration: 1000,
-          easing: Easing.inOut(Easing.ease),
-          useNativeDriver: true,
-        }),
-        Animated.timing(pulseAnim, {
-          toValue: 1,
-          duration: 1000,
-          easing: Easing.inOut(Easing.ease),
-          useNativeDriver: true,
-        })
-      ])
-    ).start();
+    const timer = setInterval(() => {
+      setTimeLeft((prev) => (prev > 0 ? prev - 1 : 0));
+    }, 1000);
+
+    const scrollTimer = setInterval(() => {
+      scrollIndex.current = (scrollIndex.current + 1) % totalCards;
+      scrollViewRef.current?.scrollTo({ x: scrollIndex.current * snapInterval, animated: true });
+    }, 3500); // Auto-scroll every 3.5 seconds
+
+    return () => {
+      clearInterval(timer);
+      clearInterval(scrollTimer);
+    };
   }, []);
 
+  const formatTime = (seconds: number) => {
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    const s = seconds % 60;
+    return `${h}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+  };
+
+  const progressPercent = ((totalTime - timeLeft) / totalTime) * 100;
+
   return (
-    <TouchableOpacity onPress={onPress} activeOpacity={0.9} style={styles.container}>
-      {/* Dark Base */}
-      <View style={styles.backgroundBase} />
+    <View style={styles.container}>
+      <Text style={styles.headerTitle}>Get Inspired</Text>
+      
+      <ScrollView 
+        ref={scrollViewRef}
+        horizontal 
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={styles.scrollContent}
+        snapToInterval={snapInterval}
+        decelerationRate="fast"
+      >
+        {/* Card 1: Birthday Anthem */}
+        <TouchableOpacity style={styles.card} onPress={() => onPress('birthday')} activeOpacity={0.9}>
+          <Image 
+            source={{ uri: 'https://images.unsplash.com/photo-1530103862676-de88b49e083c?q=80&w=500&auto=format&fit=crop' }} 
+            style={styles.cardBg}
+            blurRadius={10}
+          />
+          <LinearGradient colors={['rgba(255,100,50,0.7)', 'rgba(150,30,10,0.95)']} style={styles.cardOverlay} />
+          
+          <View style={styles.cardContent}>
+            <View>
+              <Text style={[styles.newFeatureText, { color: '#ffcc00' }]}>Popular</Text>
+              <Text style={styles.cardTitle}>Write a Birthday{'\n'}Anthem</Text>
+            </View>
+            
+            <View style={styles.cardFooter}>
+              <View style={[styles.iconCircle, { borderColor: '#ffcc00' }]}>
+                <Ionicons name="gift" size={14} color="#ffcc00" />
+              </View>
+            </View>
+          </View>
+          <View style={[styles.topBorderHighlight, { width: `${progressPercent}%`, backgroundColor: '#ffcc00' }]} />
+        </TouchableOpacity>
 
-      {/* Glowing Ambient Orbs */}
-      <View style={[styles.orb, { top: -40, left: -20, backgroundColor: '#FF0055', width: 150, height: 150 }]} />
-      <View style={[styles.orb, { bottom: -50, right: -30, backgroundColor: '#00F0FF', width: 180, height: 180 }]} />
-      <View style={[styles.orb, { top: 20, right: 40, backgroundColor: '#6441A5', width: 100, height: 100 }]} />
+        {/* Card 2: Roast a Friend */}
+        <TouchableOpacity style={[styles.card, { backgroundColor: '#1a1a1a' }]} onPress={() => onPress('roast')} activeOpacity={0.9}>
+          <LinearGradient colors={['#ff4d4d', '#800000']} style={StyleSheet.absoluteFill} />
+          <LinearGradient colors={['rgba(0,0,0,0)', 'rgba(0,0,0,0.6)']} style={StyleSheet.absoluteFill} />
+          
+          <View style={styles.cardContent}>
+            <Text style={styles.cardTitle}>Roast a{'\n'}Friend</Text>
+            <View style={styles.cardFooter}>
+              <View style={[styles.iconCircle, { borderColor: '#fff' }]}>
+                <Ionicons name="flame" size={14} color="#fff" />
+              </View>
+            </View>
+          </View>
+        </TouchableOpacity>
 
-      {/* Heavy Frosted Glass Overlay */}
-      <BlurView intensity={90} tint="dark" style={styles.glassPanel}>
+        {/* Card 3: Lofi Study Beats */}
+        <TouchableOpacity style={styles.card} onPress={() => onPress('lofi')} activeOpacity={0.9}>
+          <Image 
+            source={{ uri: 'https://images.unsplash.com/photo-1558021212-51b6ecfa0db9?q=80&w=500&auto=format&fit=crop' }} 
+            style={styles.cardBg}
+          />
+          <LinearGradient colors={['rgba(50,50,150,0.6)', 'rgba(10,10,50,0.95)']} style={styles.cardOverlay} />
+          
+          <View style={styles.cardContent}>
+            <View>
+              <Text style={[styles.newFeatureText, { color: '#88ccff' }]}>Focus</Text>
+              <Text style={styles.cardTitle}>Lofi Study{'\n'}Beats</Text>
+            </View>
+            <View style={styles.cardFooter}>
+              <View style={[styles.iconCircle, { borderColor: '#88ccff' }]}>
+                <Ionicons name="book" size={14} color="#88ccff" />
+              </View>
+            </View>
+          </View>
+        </TouchableOpacity>
+
+        {/* Card 4: Workout Track */}
+        <TouchableOpacity style={styles.card} onPress={() => onPress('workout')} activeOpacity={0.9}>
+          <Image 
+            source={{ uri: 'https://images.unsplash.com/photo-1534438327276-14e5300c3a48?q=80&w=500&auto=format&fit=crop' }} 
+            style={styles.cardBg}
+          />
+          <LinearGradient colors={['rgba(0,255,100,0.4)', 'rgba(0,50,20,0.9)']} style={styles.cardOverlay} />
+          
+          <View style={styles.cardContent}>
+            <Text style={styles.cardTitle}>Ultimate{'\n'}Workout Track</Text>
+            <View style={styles.cardFooter}>
+              <View style={[styles.iconCircle, { borderColor: '#00ff88' }]}>
+                <Ionicons name="barbell" size={14} color="#00ff88" />
+              </View>
+            </View>
+          </View>
+        </TouchableOpacity>
+
+        {/* Card 5: Make a Lullaby */}
+        <TouchableOpacity style={styles.card} onPress={() => onPress('lullaby')} activeOpacity={0.9}>
+          <Image 
+            source={{ uri: 'https://images.unsplash.com/photo-1517488629431-6427e0ee1e5f?q=80&w=500&auto=format&fit=crop' }} 
+            style={styles.cardBg}
+          />
+          <LinearGradient colors={['rgba(100,50,200,0.5)', 'rgba(30,10,80,0.9)']} style={styles.cardOverlay} />
+          
+          <View style={styles.cardContent}>
+            <View>
+              <Text style={[styles.newFeatureText, { color: '#d4aaff' }]}>Sleep</Text>
+              <Text style={styles.cardTitle}>Make a{'\n'}Lullaby</Text>
+            </View>
+            <View style={styles.cardFooter}>
+              <View style={[styles.iconCircle, { borderColor: '#d4aaff' }]}>
+                <Ionicons name="moon" size={14} color="#d4aaff" />
+              </View>
+            </View>
+          </View>
+        </TouchableOpacity>
+
+        {/* Card 6: Sing My Poem */}
+        <TouchableOpacity style={styles.card} onPress={() => onPress('poem')} activeOpacity={0.9}>
+          <LinearGradient colors={['#2a4b7c', '#15253e']} style={StyleSheet.absoluteFill} />
+          <LinearGradient colors={['rgba(0,0,0,0)', 'rgba(0,0,0,0.5)']} style={StyleSheet.absoluteFill} />
+          
+          <View style={styles.cardContent}>
+            <Text style={styles.cardTitle}>Sing My{'\n'}Poem</Text>
+            <View style={styles.cardFooter}>
+              <View style={[styles.iconCircle, { borderColor: '#fff' }]}>
+                <Ionicons name="document-text" size={14} color="#fff" />
+              </View>
+            </View>
+          </View>
+        </TouchableOpacity>
         
-        {/* NEW Tag */}
-        <View style={styles.newTag}>
-          <Text style={styles.newTagText}>NEW FEATURE</Text>
-        </View>
-
-        <View style={styles.contentWrap}>
-          <Text style={styles.title}>BECOME A</Text>
-          <Text style={styles.titleHighlight}>SUPERSTAR</Text>
-          <Text style={styles.subtitle}>Generate chart-topping hits in seconds using advanced AI. No studio required.</Text>
-        </View>
-
-        {/* Pulsing CTA Button */}
-        <Animated.View style={[styles.ctaBtnWrap, { transform: [{ scale: pulseAnim }] }]}>
-          <LinearGradient 
-            colors={['#FF0055', '#9D00FF']} 
-            start={{ x: 0, y: 0 }} 
-            end={{ x: 1, y: 1 }} 
-            style={styles.ctaBtn}
-          >
-            <Ionicons name="color-wand" size={16} color="#fff" style={{ marginRight: 6 }} />
-            <Text style={styles.ctaText}>TRY AI STUDIO NOW</Text>
-          </LinearGradient>
-        </Animated.View>
-
-        {/* Edge Highlight */}
-        <View style={styles.edgeHighlight} />
-      </BlurView>
-    </TouchableOpacity>
+      </ScrollView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
-    marginHorizontal: 16,
     marginTop: 16,
-    minHeight: 260, // Increased height to ensure button isn't cut off
-    borderRadius: 24, // Rounder, premium corners
-    overflow: 'hidden',
-    marginBottom: 32,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.1)',
-    elevation: 10,
-    shadowColor: '#9D00FF',
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.5,
-    shadowRadius: 15,
+    marginBottom: 24,
   },
-  backgroundBase: {
-    ...StyleSheet.absoluteFill,
-    backgroundColor: '#0a0a0f',
-  },
-  orb: {
-    position: 'absolute',
-    borderRadius: 200,
-    opacity: 0.7,
-  },
-  glassPanel: {
-    flex: 1,
-    padding: 20,
-    justifyContent: 'space-between',
-  },
-  newTag: {
-    alignSelf: 'flex-start',
-    backgroundColor: 'rgba(255,255,255,0.15)',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.3)',
-  },
-  newTagText: {
-    color: '#00F0FF',
-    fontSize: 10,
-    fontWeight: '900',
-    letterSpacing: 1,
-  },
-  contentWrap: {
-    marginTop: 8,
-  },
-  title: {
+  headerTitle: {
     color: '#fff',
-    fontSize: 22,
-    fontWeight: '900',
-    letterSpacing: 1,
-  },
-  titleHighlight: {
-    color: '#FF0055',
-    fontSize: 32,
-    fontWeight: '900',
-    letterSpacing: 1,
-    lineHeight: 36,
-    textShadowColor: 'rgba(255,0,85,0.8)',
-    textShadowOffset: { width: 0, height: 0 },
-    textShadowRadius: 10,
-  },
-  subtitle: {
-    color: 'rgba(255,255,255,0.7)',
-    fontSize: 12,
-    fontWeight: '500',
-    marginTop: 6,
-    lineHeight: 18,
-    maxWidth: '80%',
-  },
-  ctaBtnWrap: {
-    alignSelf: 'flex-start',
-    marginTop: 12,
-  },
-  ctaBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 20,
-    paddingVertical: 10,
-    borderRadius: 20,
-  },
-  ctaText: {
-    color: '#fff',
-    fontSize: 12,
+    fontSize: 24,
     fontWeight: '800',
-    letterSpacing: 0.5,
+    paddingHorizontal: 16,
+    marginBottom: 16,
   },
-  edgeHighlight: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    height: 1,
-    backgroundColor: 'rgba(255,255,255,0.4)',
+  scrollContent: {
+    paddingLeft: 16,
+    paddingRight: 16,
+    gap: 12,
+  },
+  card: {
+    width: 160,
+    height: 180,
+    borderRadius: 20,
+    overflow: 'hidden',
+    backgroundColor: '#1a1a1a',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
+  },
+  cardBg: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  cardOverlay: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  cardContent: {
+    flex: 1,
+    padding: 16,
+    justifyContent: 'space-between',
     zIndex: 2,
   },
+  newFeatureText: {
+    color: '#ff3b70',
+    fontSize: 12,
+    fontWeight: '700',
+    marginBottom: 6,
+  },
+  cardTitle: {
+    color: '#fff',
+    fontSize: 17,
+    fontWeight: '700',
+    lineHeight: 22,
+  },
+  cardFooter: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-end',
+  },
+  timeText: {
+    color: '#ff3b70',
+    fontSize: 14,
+    fontWeight: '700',
+    letterSpacing: 1,
+  },
+  iconCircle: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.6)',
+    borderStyle: 'dashed',
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0,0,0,0.3)',
+  },
+  topBorderHighlight: {
+    position: 'absolute',
+    top: -1,
+    left: -1,
+    height: 3,
+    backgroundColor: '#ff3b70',
+    borderTopLeftRadius: 20,
+    zIndex: 10,
+  },
+  connectBtn: {
+    backgroundColor: 'rgba(255,255,255,0.2)',
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    borderRadius: 20,
+    alignSelf: 'flex-start',
+  },
+  connectBtnText: {
+    color: '#fff',
+    fontWeight: '600',
+    fontSize: 14,
+  }
 });
