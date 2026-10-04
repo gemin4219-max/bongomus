@@ -31,6 +31,8 @@ export default function AdminSettingsScreen() {
   const [promoteUsername, setPromoteUsername] = useState('');
   const [promoting, setPromoting] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [mpesaEnabled, setMpesaEnabled] = useState(true);
+  const [enablingMpesa, setEnablingMpesa] = useState(false);
 
   useFocusEffect(
     useCallback(() => {
@@ -52,6 +54,9 @@ export default function AdminSettingsScreen() {
       if (keyRes?.data) setApiKey(keyRes.data.value);
       if (kieRes?.data) setKieKey(kieRes.data.value);
       if (providerRes?.data) setAiProvider(providerRes.data.value as 'suno' | 'kie');
+
+      const { data: mpesaRow } = await supabase.from('system_settings').select('value').eq('key', 'mpesa_enabled').maybeSingle();
+      setMpesaEnabled(mpesaRow?.value === 'true');
     } catch (err: any) {
       console.error(err);
     } finally {
@@ -81,6 +86,36 @@ export default function AdminSettingsScreen() {
     } finally {
       setSavingKey(false);
     }
+  };
+
+  const handleEnableMpesa = () => {
+    Alert.alert(
+      'Enable Vodacom M-Pesa?',
+      'Users will be able to pay with M-Pesa. Only do this once Vodacom is working on the payment provider. This notice will be removed from the admin panel.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'M-Pesa is Working',
+          onPress: async () => {
+            setEnablingMpesa(true);
+            try {
+              const { error } = await supabase.from('system_settings').upsert({
+                key: 'mpesa_enabled',
+                value: 'true',
+                updated_at: new Date().toISOString()
+              }, { onConflict: 'key' });
+              if (error) throw error;
+              setMpesaEnabled(true);
+              Alert.alert('Done', 'M-Pesa is now accepted on the payment page.');
+            } catch (err: any) {
+              Alert.alert('Error', err.message);
+            } finally {
+              setEnablingMpesa(false);
+            }
+          }
+        }
+      ]
+    );
   };
 
   const handlePromote = async () => {
@@ -165,6 +200,31 @@ export default function AdminSettingsScreen() {
                 </LinearGradient>
               </TouchableOpacity>
             </View>
+
+            {/* Vodacom M-Pesa (shown only until admin enables it) */}
+            {!mpesaEnabled && (
+              <View style={[styles.glassCard, { borderColor: `${COLORS.gold}60` }]}>
+                <View style={styles.cardHeader}>
+                  <Ionicons name="phone-portrait-outline" size={20} color={COLORS.gold} />
+                  <Text style={styles.cardTitle}>Vodacom M-Pesa</Text>
+                </View>
+                <Text style={[styles.navSubtitle, { fontSize: 14, lineHeight: 20, marginBottom: 16 }]}>
+                  M-Pesa is currently blocked. Users see: "Vodacom M-Pesa is not supported right now. Please use Airtel Money, HaloPesa, or Tigo Pesa."
+                </Text>
+                <TouchableOpacity style={styles.saveBtnWrapper} onPress={handleEnableMpesa} disabled={enablingMpesa}>
+                  <LinearGradient colors={[COLORS.gold, COLORS.goldDark]} style={styles.saveBtn}>
+                    {enablingMpesa ? (
+                      <ActivityIndicator color={COLORS.black} size="small" />
+                    ) : (
+                      <>
+                        <Ionicons name="checkmark-circle-outline" size={18} color={COLORS.black} />
+                        <Text style={styles.saveBtnText}>M-Pesa is Working - Enable</Text>
+                      </>
+                    )}
+                  </LinearGradient>
+                </TouchableOpacity>
+              </View>
+            )}
 
             {/* API Settings Section */}
             <View style={styles.glassCard}>

@@ -20,6 +20,19 @@ export default function BuyCreditsScreen() {
   const [creditsToBuy, setCreditsToBuy] = useState('1');
   const [isProcessing, setIsProcessing] = useState(false);
   const [transactionId, setTransactionId] = useState<string | null>(null);
+  const [mpesaEnabled, setMpesaEnabled] = useState(false);
+
+  // Admin controls whether Vodacom M-Pesa is accepted (system_settings.mpesa_enabled)
+  useEffect(() => {
+    (async () => {
+      try {
+        const { data } = await supabase.from('system_settings').select('value').eq('key', 'mpesa_enabled').maybeSingle();
+        setMpesaEnabled(data?.value === 'true');
+      } catch (e) {
+        setMpesaEnabled(false);
+      }
+    })();
+  }, []);
 
   // Listen for transaction status changes via Supabase Realtime
   useEffect(() => {
@@ -64,7 +77,7 @@ export default function BuyCreditsScreen() {
 
     // Detect Vodacom Tanzania prefixes (075, 076, 074)
     const isVodacom = /^(?:\+?255|0)?(75|76|74)\d{7}$/.test(cleanPhone);
-    if (isVodacom) {
+    if (isVodacom && !mpesaEnabled) {
       Alert.alert(
         "Network Not Supported", 
         "Vodacom M-Pesa is not supported right now. Please use Airtel Money, HaloPesa, or Tigo Pesa."
@@ -202,7 +215,7 @@ export default function BuyCreditsScreen() {
               />
             </View>
             
-            <Text style={styles.label}>Pay with Mobile Money <Text style={{ color: COLORS.gold, fontSize: 12 }}>(Airtel, Halopesa & Tigo)</Text></Text>
+            <Text style={styles.label}>Pay with Mobile Money <Text style={{ color: COLORS.gold, fontSize: 12 }}>(Airtel, Halopesa{mpesaEnabled ? ', Tigo & M-Pesa' : ' & Tigo'})</Text></Text>
             <View style={styles.inputRow}>
               <Ionicons name="phone-portrait-outline" size={20} color={COLORS.gold} />
               <TextInput 
