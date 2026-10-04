@@ -2785,9 +2785,14 @@ export default function AIStudioScreen() {
       {/* Base Studio View */}
       <View style={{ flex: 1 }}>
         <View style={styles.header}>
-          <Text style={[styles.headerTitle, { color: COLORS.textPrimary }]}>
-            Studio
-          </Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+            <TouchableOpacity onPress={() => router.push('/')} style={{ marginRight: 16, padding: 4 }}>
+              <Ionicons name="chevron-back" size={26} color={COLORS.textPrimary} />
+            </TouchableOpacity>
+            <Text style={[styles.headerTitle, { color: COLORS.textPrimary }]}>
+              Studio
+            </Text>
+          </View>
           <TouchableOpacity
             style={styles.creditsBadge}
             onPress={() => router.push("/buy-credits")}

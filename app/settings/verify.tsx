@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { View, Text, TextInput, TouchableOpacity, StyleSheet, Alert, ActivityIndicator, KeyboardAvoidingView, Platform, ScrollView } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { GlassView as BlurView } from '@/components/GlassView';
+
 import { Stack, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuthStore } from '../../store/authStore';
@@ -82,7 +82,7 @@ export default function VerifyScreen() {
   if (fetching) {
     return (
       <View style={styles.center}>
-      <BlurView intensity={30} tint="dark" style={StyleSheet.absoluteFill} />
+      <View style={[StyleSheet.absoluteFill, { backgroundColor: COLORS.black }]} />
         <Stack.Screen options={{ title: 'Get Verified', headerShown: true, headerTransparent: true, headerTintColor: COLORS.gold, }} />
         <ActivityIndicator color={COLORS.gold} size="large" />
       </View>
@@ -90,7 +90,7 @@ export default function VerifyScreen() {
   }
 
   return (
-    <BlurView intensity={70} tint="dark" style={{ flex: 1 }}>
+    <View style={{ flex: 1, backgroundColor: COLORS.black }}>
       <SafeAreaView style={{ flex: 1 }} edges={['top']}>
         <Stack.Screen options={{ headerShown: false }} />
         <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingTop: 60, paddingBottom: 12 }}>
@@ -180,7 +180,7 @@ export default function VerifyScreen() {
         </ScrollView>
       </KeyboardAvoidingView>
       </SafeAreaView>
-    </BlurView>
+    </View>
   );
 }
 

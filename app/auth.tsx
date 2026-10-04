@@ -1,13 +1,12 @@
 import React, { useState } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity,
-  StyleSheet, ScrollView, Alert, ActivityIndicator, KeyboardAvoidingView, Platform, Animated
+  StyleSheet, ScrollView, Alert, ActivityIndicator, KeyboardAvoidingView, Platform
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useAuthStore } from '../store/authStore';
 import { useThemeStore } from '../store/themeStore';
-
 
 export default function AuthScreen() {
   const { COLORS } = useThemeStore();
@@ -20,24 +19,6 @@ export default function AuthScreen() {
 
   const [mode, setMode] = useState<'login' | 'signup'>('login');
   
-  const scaleAnim = React.useRef(new Animated.Value(1)).current;
-
-  React.useEffect(() => {
-    Animated.loop(
-      Animated.sequence([
-        Animated.timing(scaleAnim, {
-          toValue: 1.05,
-          duration: 1500,
-          useNativeDriver: true,
-        }),
-        Animated.timing(scaleAnim, {
-          toValue: 1,
-          duration: 1500,
-          useNativeDriver: true,
-        })
-      ])
-    ).start();
-  }, []);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [verifyPassword, setVerifyPassword] = useState('');
@@ -100,173 +81,332 @@ export default function AuthScreen() {
   return (
     <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <ScrollView style={styles.container} contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
-        <View style={{ alignItems: 'center', marginBottom: 12 }}>
-          <Animated.Text style={[styles.appName, { transform: [{ scale: scaleAnim }] }]}>BONGO STREAM</Animated.Text>
-          <Text style={styles.tagline}>Muziki wa Tanzania</Text>
+        
+        <View style={styles.header}>
+          <Text style={styles.appName}>BONGO STREAM</Text>
+          <Text style={styles.tagline}>
+            {mode === 'login' ? 'Karibu tena! Ingia kwenye akaunti yako.' : 'Tengeneza akaunti mpya kuanza.'}
+          </Text>
         </View>
 
-        {/* Mode Toggle */}
-        <View style={styles.modeToggle}>
-          <TouchableOpacity style={[styles.modeBtn, mode === 'login' && styles.modeBtnActive]} onPress={() => setMode('login')}>
-            <Text style={[styles.modeBtnText, mode === 'login' && styles.modeBtnTextActive]}>Ingia</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={[styles.modeBtn, mode === 'signup' && styles.modeBtnActive]} onPress={() => setMode('signup')}>
-            <Text style={[styles.modeBtnText, mode === 'signup' && styles.modeBtnTextActive]}>Jisajili</Text>
-          </TouchableOpacity>
-        </View>
+        <View style={styles.formContainer}>
+          {/* Sign Up fields */}
+          {mode === 'signup' && (
+            <>
+              <Field styles={styles} COLORS={COLORS} value={displayName} onChange={setDisplayName} placeholder="Jina Kamili (Mf. John Doe)" icon="person-outline" />
+              <Field styles={styles} COLORS={COLORS} value={username} onChange={t => setUsername(t.toLowerCase())} placeholder="Jina la Mtumiaji (@username)" icon="at-outline" />
+            </>
+          )}
 
-        {/* Sign Up fields */}
-        {mode === 'signup' && (
-          <>
-            <Field styles={styles} COLORS={COLORS} label="Jina Kamili" value={displayName} onChange={setDisplayName} placeholder="Jina lako..." icon="person-outline" />
-            <Field styles={styles} COLORS={COLORS} label="Jina la Mtumiaji" value={username} onChange={t => setUsername(t.toLowerCase())} placeholder="@username" icon="at-outline" />
-          </>
-        )}
-
-        <Field styles={styles} COLORS={COLORS} label={mode === 'login' ? "Namba ya Simu, Barua Pepe au Username" : "Namba ya Simu au Barua Pepe"} value={email} onChange={setEmail} placeholder={mode === 'login' ? "07... au mfano@gmail.com" : "07... au mfano@gmail.com"} icon={mode === 'login' ? "person-outline" : "call-outline"} keyboardType={mode === 'login' ? "default" : "email-address"} autoCapitalize="none" />
-
-        {/* Password */}
-        <Text style={styles.fieldLabel}>Nywila</Text>
-        <View style={styles.pwRow}>
-          <Ionicons name="lock-closed-outline" size={18} color={COLORS.gold} />
-          <TextInput
-            style={styles.pwInput}
-            value={password}
-            onChangeText={setPassword}
-            placeholder="Nywila yako..."
-            placeholderTextColor={COLORS.textTertiary}
-            secureTextEntry={!pwVisible}
-            autoCapitalize="none"
+          <Field 
+            styles={styles} 
+            COLORS={COLORS} 
+            value={email} 
+            onChange={setEmail} 
+            placeholder={mode === 'login' ? "Namba ya Simu au Barua Pepe" : "Namba ya Simu au Barua Pepe"} 
+            icon={mode === 'login' ? "person-outline" : "call-outline"} 
+            keyboardType={mode === 'login' ? "default" : "email-address"} 
+            autoCapitalize="none" 
           />
-          <TouchableOpacity onPress={() => setPwVisible(!pwVisible)}>
-            <Ionicons name={pwVisible ? 'eye-off-outline' : 'eye-outline'} size={18} color={COLORS.textSecondary} />
-          </TouchableOpacity>
-        </View>
 
-        {/* Verify Password (Signup Only) */}
-        {mode === 'signup' && (
-          <>
-            <Text style={styles.fieldLabel}>Thibitisha Nywila</Text>
-            <View style={styles.pwRow}>
-              <Ionicons name="lock-closed-outline" size={18} color={COLORS.gold} />
+          {/* Password */}
+          <View style={styles.fieldRow}>
+            <Ionicons name="lock-closed-outline" size={20} color={COLORS.textSecondary} />
+            <TextInput
+              style={styles.fieldInput}
+              value={password}
+              onChangeText={setPassword}
+              placeholder="Nywila yako"
+              placeholderTextColor={COLORS.textTertiary}
+              secureTextEntry={!pwVisible}
+              autoCapitalize="none"
+            />
+            <TouchableOpacity onPress={() => setPwVisible(!pwVisible)} style={styles.eyeIcon}>
+              <Ionicons name={pwVisible ? 'eye-off-outline' : 'eye-outline'} size={20} color={COLORS.textTertiary} />
+            </TouchableOpacity>
+          </View>
+
+          {/* Verify Password (Signup Only) */}
+          {mode === 'signup' && (
+            <View style={styles.fieldRow}>
+              <Ionicons name="lock-closed-outline" size={20} color={COLORS.textSecondary} />
               <TextInput
-                style={styles.pwInput}
+                style={styles.fieldInput}
                 value={verifyPassword}
                 onChangeText={setVerifyPassword}
-                placeholder="Thibitisha nywila yako..."
+                placeholder="Thibitisha nywila yako"
                 placeholderTextColor={COLORS.textTertiary}
                 secureTextEntry={!vpwVisible}
                 autoCapitalize="none"
               />
-              <TouchableOpacity onPress={() => setVpwVisible(!vpwVisible)}>
-                <Ionicons name={vpwVisible ? 'eye-off-outline' : 'eye-outline'} size={18} color={COLORS.textSecondary} />
+              <TouchableOpacity onPress={() => setVpwVisible(!vpwVisible)} style={styles.eyeIcon}>
+                <Ionicons name={vpwVisible ? 'eye-off-outline' : 'eye-outline'} size={20} color={COLORS.textTertiary} />
               </TouchableOpacity>
             </View>
-          </>
-        )}
+          )}
 
-        {/* Artist toggle */}
-        {mode === 'signup' && (
-          <>
-            <TouchableOpacity
-              style={[styles.artistToggle, isArtist && styles.artistToggleActive]}
-              onPress={() => setIsArtist(!isArtist)}
-            >
-              <View style={{ flex: 1 }}>
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                  <Ionicons name="mic" size={18} color={isArtist ? COLORS.gold : COLORS.textPrimary} />
+          {/* Artist toggle & Terms */}
+          {mode === 'signup' && (
+            <View style={styles.signupExtras}>
+              <TouchableOpacity
+                style={[styles.artistToggle, isArtist && styles.artistToggleActive]}
+                onPress={() => setIsArtist(!isArtist)}
+                activeOpacity={0.7}
+              >
+                <View style={[styles.radio, isArtist && styles.radioActive]}>
+                  {isArtist && <View style={styles.radioInner} />}
+                </View>
+                <View style={{ flex: 1 }}>
                   <Text style={[styles.artistToggleTitle, isArtist && { color: COLORS.gold }]}>
                     Mimi ni Msanii
                   </Text>
+                  <Text style={styles.artistToggleSub}>Wezesha kupakia nyimbo zako</Text>
                 </View>
-                <Text style={styles.artistToggleSub}>Wezesha kupakia nyimbo</Text>
-              </View>
-              <View style={[styles.checkbox, isArtist && styles.checkboxActive]}>
-                {isArtist && <Ionicons name="checkmark" size={14} color={COLORS.black} />}
-              </View>
-            </TouchableOpacity>
+                <Ionicons name="mic" size={20} color={isArtist ? COLORS.gold : COLORS.textTertiary} />
+              </TouchableOpacity>
 
-            <TouchableOpacity style={styles.termsRow} onPress={() => setAcceptedTerms(!acceptedTerms)}>
-              <View style={[styles.checkbox, acceptedTerms && styles.checkboxActive]}>
-                {acceptedTerms && <Ionicons name="checkmark" size={14} color={COLORS.black} />}
-              </View>
-              <View style={{ flex: 1, flexDirection: 'row', flexWrap: 'wrap' }}>
-                <Text style={styles.termsText}>I agree to the </Text>
-                <TouchableOpacity onPress={() => router.push('/terms')}>
-                  <Text style={styles.termsLink}>Terms & Conditions</Text>
-                </TouchableOpacity>
-              </View>
-            </TouchableOpacity>
-          </>
-        )}
+              <TouchableOpacity style={styles.termsRow} onPress={() => setAcceptedTerms(!acceptedTerms)} activeOpacity={0.7}>
+                <View style={[styles.checkbox, acceptedTerms && styles.checkboxActive]}>
+                  {acceptedTerms && <Ionicons name="checkmark" size={14} color={COLORS.black} />}
+                </View>
+                <View style={styles.termsTextRow}>
+                  <Text style={styles.termsText}>Ninakubali </Text>
+                  <TouchableOpacity onPress={() => router.push('/terms')}>
+                    <Text style={styles.termsLink}>Vigezo & Masharti</Text>
+                  </TouchableOpacity>
+                </View>
+              </TouchableOpacity>
+            </View>
+          )}
 
-        {/* Submit */}
-        <TouchableOpacity style={styles.submitBtn} onPress={handleSubmit} disabled={isLoading}>
-          {isLoading
-            ? <ActivityIndicator color={COLORS.black} size="small" />
-            : <Text style={styles.submitText}>{mode === 'login' ? 'Ingia' : 'Jisajili'}</Text>
-          }
-        </TouchableOpacity>
+          {/* Submit */}
+          <TouchableOpacity style={styles.submitBtn} onPress={handleSubmit} disabled={isLoading} activeOpacity={0.8}>
+            {isLoading
+              ? <ActivityIndicator color={COLORS.black} size="small" />
+              : <Text style={styles.submitText}>{mode === 'login' ? 'INGIA' : 'JISAJILI'}</Text>
+            }
+          </TouchableOpacity>
+        </View>
 
-        {/* Offline Mode Bypass */}
-        <TouchableOpacity style={styles.offlineBtn} onPress={() => enableOfflineMode()} disabled={isLoading}>
-          <Ionicons name="cloud-offline" size={20} color={COLORS.textSecondary} />
-          <Text style={styles.offlineText}>Endelea Nje ya Mtandao (Offline)</Text>
-        </TouchableOpacity>
+        {/* Footer Links */}
+        <View style={styles.footer}>
+
+
+          <View style={styles.divider} />
+
+          <TouchableOpacity style={styles.offlineBtn} onPress={() => {
+            const signInAnonymously = useAuthStore.getState().signInAnonymously;
+            signInAnonymously().then(err => {
+              if (err) Alert.alert('Kosa', err);
+            });
+          }} disabled={isLoading}>
+            <Text style={styles.offlineText}>Endelea kama Mgeni (Guest)</Text>
+            <Ionicons name="arrow-forward" size={16} color={COLORS.textTertiary} />
+          </TouchableOpacity>
+        </View>
+
       </ScrollView>
     </KeyboardAvoidingView>
   );
 }
 
-function Field({ label, styles, COLORS, value, onChange, placeholder, icon, keyboardType }: any) {
+function Field({ styles, COLORS, value, onChange, placeholder, icon, keyboardType }: any) {
   return (
-    <View>
-      <Text style={styles.fieldLabel}>{label}</Text>
-      <View style={styles.fieldRow}>
-        <Ionicons name={icon} size={18} color={COLORS.gold} />
-        <TextInput
-          style={styles.fieldInput}
-          value={value}
-          onChangeText={onChange}
-          placeholder={placeholder}
-          placeholderTextColor={COLORS.textTertiary}
-          autoCapitalize="none"
-          keyboardType={keyboardType}
-        />
-      </View>
+    <View style={styles.fieldRow}>
+      <Ionicons name={icon} size={20} color={COLORS.textSecondary} />
+      <TextInput
+        style={styles.fieldInput}
+        value={value}
+        onChangeText={onChange}
+        placeholder={placeholder}
+        placeholderTextColor={COLORS.textTertiary}
+        autoCapitalize="none"
+        keyboardType={keyboardType}
+      />
     </View>
   );
 }
 
 const getStyles = (COLORS: any) => StyleSheet.create({
-  container: { flex: 1, backgroundColor: COLORS.black },
-  content: { padding: 24, flexGrow: 1, justifyContent: 'center', gap: 12 },
-  logoWrap: { alignItems: 'center', marginBottom: 4 },
-  appName: { color: COLORS.gold, fontSize: 28, fontWeight: '900', textAlign: 'center', letterSpacing: 3 },
-  tagline: { color: COLORS.textSecondary, fontSize: 14, textAlign: 'center', marginBottom: 8 },
-  modeToggle: { flexDirection: 'row', backgroundColor: COLORS.card, borderRadius: 12, padding: 4, marginVertical: 8 },
-  modeBtn: { flex: 1, paddingVertical: 10, borderRadius: 10, alignItems: 'center' },
-  modeBtnActive: { backgroundColor: COLORS.gold + '30' },
-  modeBtnText: { color: COLORS.textTertiary, fontWeight: '700' },
-  modeBtnTextActive: { color: COLORS.gold },
-  fieldLabel: { color: COLORS.textSecondary, fontSize: 12, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 6, marginTop: 4 },
-  fieldRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: COLORS.card, borderRadius: 12, paddingHorizontal: 14, paddingVertical: 12, gap: 10 },
-  fieldInput: { flex: 1, color: COLORS.textPrimary, fontSize: 15 },
-  pwRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: COLORS.card, borderRadius: 12, paddingHorizontal: 14, paddingVertical: 12, gap: 10 },
-  pwInput: { flex: 1, color: COLORS.textPrimary, fontSize: 15 },
-  artistToggle: { flexDirection: 'row', alignItems: 'center', backgroundColor: COLORS.card, borderRadius: 12, padding: 14, borderWidth: 1, borderColor: COLORS.divider, gap: 12, marginTop: 4 },
-  artistToggleActive: { borderColor: COLORS.gold, backgroundColor: COLORS.gold + '15' },
-  artistToggleTitle: { color: COLORS.textPrimary, fontSize: 15, fontWeight: '700' },
-  artistToggleSub: { color: COLORS.textSecondary, fontSize: 12, marginTop: 2 },
-  checkbox: { width: 22, height: 22, borderRadius: 6, borderWidth: 2, borderColor: COLORS.divider, justifyContent: 'center', alignItems: 'center' },
-  checkboxActive: { backgroundColor: COLORS.gold, borderColor: COLORS.gold },
-  termsRow: { flexDirection: 'row', alignItems: 'center', marginTop: 12, gap: 10, paddingHorizontal: 4 },
-  termsText: { color: COLORS.textSecondary, fontSize: 13 },
-  termsLink: { color: COLORS.gold, fontSize: 13, textDecorationLine: 'underline' },
-  submitBtn: { backgroundColor: COLORS.gold, borderRadius: 12, padding: 16, alignItems: 'center', marginTop: 16 },
-  submitText: { color: COLORS.black, fontWeight: '900', fontSize: 16 },
-  offlineBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 16, marginTop: 4 },
-  offlineText: { color: COLORS.textSecondary, fontSize: 14, fontWeight: '600' },
-  skipBtn: { alignItems: 'center', paddingVertical: 12 },
-  skipText: { color: COLORS.textTertiary, fontSize: 13 },
+  container: { 
+    flex: 1, 
+    backgroundColor: COLORS.black 
+  },
+  content: { 
+    padding: 24, 
+    flexGrow: 1, 
+    justifyContent: 'center',
+    paddingTop: 60,
+    paddingBottom: 40,
+  },
+  header: { 
+    marginBottom: 40,
+    marginTop: 20
+  },
+  appName: { 
+    color: COLORS.gold, 
+    fontSize: 32, 
+    fontWeight: '900', 
+    letterSpacing: 2,
+    marginBottom: 8
+  },
+  tagline: { 
+    color: COLORS.textSecondary, 
+    fontSize: 15, 
+    lineHeight: 22 
+  },
+  formContainer: {
+    gap: 16,
+  },
+  fieldRow: { 
+    flexDirection: 'row', 
+    alignItems: 'center', 
+    backgroundColor: COLORS.card, 
+    borderRadius: 14, 
+    paddingHorizontal: 16, 
+    height: 60,
+    gap: 12,
+    borderWidth: 1,
+    borderColor: 'transparent',
+  },
+  fieldInput: { 
+    flex: 1, 
+    color: COLORS.textPrimary, 
+    fontSize: 16,
+    height: '100%',
+  },
+  eyeIcon: {
+    padding: 8,
+    marginRight: -8,
+  },
+  signupExtras: {
+    marginTop: 8,
+    gap: 16,
+  },
+  artistToggle: { 
+    flexDirection: 'row', 
+    alignItems: 'center', 
+    backgroundColor: COLORS.card, 
+    borderRadius: 14, 
+    padding: 16, 
+    borderWidth: 1, 
+    borderColor: 'transparent', 
+    gap: 14 
+  },
+  artistToggleActive: { 
+    borderColor: COLORS.gold, 
+    backgroundColor: COLORS.gold + '10' 
+  },
+  radio: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    borderWidth: 2,
+    borderColor: COLORS.textTertiary,
+    justifyContent: 'center',
+    alignItems: 'center'
+  },
+  radioActive: {
+    borderColor: COLORS.gold,
+  },
+  radioInner: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: COLORS.gold,
+  },
+  artistToggleTitle: { 
+    color: COLORS.textPrimary, 
+    fontSize: 16, 
+    fontWeight: '600' 
+  },
+  artistToggleSub: { 
+    color: COLORS.textTertiary, 
+    fontSize: 13, 
+    marginTop: 4 
+  },
+  termsRow: { 
+    flexDirection: 'row', 
+    alignItems: 'center', 
+    gap: 12, 
+    paddingHorizontal: 4 
+  },
+  checkbox: { 
+    width: 22, 
+    height: 22, 
+    borderRadius: 6, 
+    borderWidth: 2, 
+    borderColor: COLORS.textTertiary, 
+    justifyContent: 'center', 
+    alignItems: 'center' 
+  },
+  checkboxActive: { 
+    backgroundColor: COLORS.gold, 
+    borderColor: COLORS.gold 
+  },
+  termsTextRow: { 
+    flex: 1, 
+    flexDirection: 'row', 
+    flexWrap: 'wrap' 
+  },
+  termsText: { 
+    color: COLORS.textSecondary, 
+    fontSize: 14 
+  },
+  termsLink: { 
+    color: COLORS.gold, 
+    fontSize: 14, 
+    fontWeight: '600' 
+  },
+  submitBtn: { 
+    backgroundColor: COLORS.gold, 
+    borderRadius: 14, 
+    height: 60, 
+    alignItems: 'center', 
+    justifyContent: 'center',
+    marginTop: 16,
+    shadowColor: COLORS.gold,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.2,
+    shadowRadius: 8,
+    elevation: 4,
+  },
+  submitText: { 
+    color: COLORS.black, 
+    fontWeight: '800', 
+    fontSize: 16,
+    letterSpacing: 1,
+  },
+  footer: {
+    marginTop: 40,
+    alignItems: 'center',
+    gap: 24,
+  },
+  switchModeBtn: {
+    padding: 8,
+  },
+  footerText: {
+    color: COLORS.textSecondary,
+    fontSize: 15,
+  },
+  footerLink: {
+    color: COLORS.gold,
+    fontWeight: '700',
+  },
+  divider: {
+    height: 1,
+    width: 40,
+    backgroundColor: COLORS.divider,
+  },
+  offlineBtn: { 
+    flexDirection: 'row', 
+    alignItems: 'center', 
+    gap: 8, 
+    padding: 8 
+  },
+  offlineText: { 
+    color: COLORS.textTertiary, 
+    fontSize: 14, 
+    fontWeight: '500' 
+  },
 });

@@ -1,97 +1,49 @@
 import React, { useState } from 'react';
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, Alert, KeyboardAvoidingView, Platform, ScrollView, ActivityIndicator } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, ScrollView, LayoutAnimation, Platform, UIManager } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { GlassView as BlurView } from '@/components/GlassView';
 import { Ionicons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
-import { supabase } from '../../lib/supabase';
-import { useAuthStore } from '../../store/authStore';
+import { useRouter, Stack } from 'expo-router';
 import { useThemeStore } from '../../store/themeStore';
 
+if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
+  UIManager.setLayoutAnimationEnabledExperimental(true);
+}
 
-export default function SupportScreen() {
+const FAQS = [
+  {
+    question: "How do I claim an artist account?",
+    answer: "To claim an artist account, go to your profile, ensure you have uploaded a profile picture, and then tap on 'Become an Artist'. If you're a guest, you must first claim your account by signing in."
+  },
+  {
+    question: "How do I pair with a partner?",
+    answer: "Go to Settings > Pair with Partner, and ask your partner for their 6-digit pairing code. Enter the code to link your accounts and share playlists."
+  },
+  {
+    question: "Why can't I see my lyrics?",
+    answer: "Lyrics are provided for verified tracks. If a track does not have lyrics, it means the artist has not uploaded them yet."
+  },
+  {
+    question: "How do I pay for AI generation?",
+    answer: "We don't use subscriptions! You simply buy in-app credits and pay per generation. Your credits stay in your account until you use them."
+  }
+];
+
+export default function SupportFAQScreen() {
   const { COLORS } = useThemeStore();
   const styles = getStyles(COLORS);
   const router = useRouter();
-  const session = useAuthStore(s => s.session);
-  const [activeTab, setActiveTab] = useState<'submit' | 'tickets'>('submit');
-  const [subject, setSubject] = useState('');
-  const [phone, setPhone] = useState('');
-  const [message, setMessage] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [tickets, setTickets] = useState<any[]>([]);
-  const [loadingTickets, setLoadingTickets] = useState(false);
+  const [expandedId, setExpandedId] = useState<number | null>(null);
 
-  React.useEffect(() => {
-    if (activeTab === 'tickets') {
-      loadMyTickets();
-    }
-  }, [activeTab]);
-
-  const loadMyTickets = async () => {
-    if (!session?.user) return;
-    setLoadingTickets(true);
-    try {
-      const { data, error } = await supabase
-        .from('support_tickets')
-        .select('*')
-        .eq('user_id', session.user.id)
-        .order('created_at', { ascending: false });
-
-      if (error) throw error;
-      setTickets(data || []);
-    } catch (err) {
-      console.error(err);
-    } finally {
-      setLoadingTickets(false);
-    }
-  };
-
-  const handleSubmit = async () => {
-    if (!session?.user) {
-      Alert.alert('Error', 'You must be logged in to submit a ticket.');
-      return;
-    }
-
-    if (!subject.trim() || !message.trim()) {
-      Alert.alert('Missing Fields', 'Please enter both a subject and a message.');
-      return;
-    }
-
-    setLoading(true);
-    try {
-      const fullMessage = phone.trim() ? `Phone: ${phone.trim()}\n\n${message.trim()}` : message.trim();
-
-      const { error } = await supabase
-        .from('support_tickets')
-        .insert({
-          user_id: session.user.id,
-          subject: subject.trim(),
-          message: fullMessage,
-        });
-
-      if (error) throw error;
-
-      Alert.alert(
-        'Ticket Submitted', 
-        'Your message has been sent to our support team. We will get back to you shortly.',
-        [{ text: 'OK', onPress: () => router.back() }]
-      );
-    } catch (err: any) {
-      console.error('Submit ticket error:', err);
-      Alert.alert('Submission Failed', err.message || 'An error occurred while submitting your ticket.');
-    } finally {
-      setLoading(false);
-    }
+  const toggleExpand = (index: number) => {
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    setExpandedId(expandedId === index ? null : index);
   };
 
   return (
-    <BlurView intensity={70} tint="dark" style={{ flex: 1 }}>
+    <View style={styles.container}>
       <SafeAreaView style={{ flex: 1 }} edges={['top']}>
-        <KeyboardAvoidingView 
-          style={styles.container} 
-          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        >
+        <Stack.Screen options={{ headerShown: false }} />
+        <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
           <View style={styles.header}>
             <TouchableOpacity style={styles.backBtn} onPress={() => router.back()}>
               <Ionicons name="chevron-back" size={28} color={COLORS.textPrimary} />
@@ -99,212 +51,90 @@ export default function SupportScreen() {
             <Text style={styles.headerTitle}>Help & Support</Text>
             <View style={{ width: 40 }} />
           </View>
+          <View style={styles.iconContainer}>
+            <Ionicons name="help-buoy" size={60} color={COLORS.gold} />
+            <Text style={styles.title}>How can we help?</Text>
+            <Text style={styles.subtitle}>
+              Find answers to frequently asked questions below, or open a ticket if you need more help.
+            </Text>
+          </View>
 
-      <View style={styles.tabs}>
-        <TouchableOpacity style={[styles.tab, activeTab === 'submit' && styles.tabActive]} onPress={() => setActiveTab('submit')}>
-          <Text style={[styles.tabText, activeTab === 'submit' && styles.tabTextActive]}>Contact Us</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={[styles.tab, activeTab === 'tickets' && styles.tabActive]} onPress={() => setActiveTab('tickets')}>
-          <Text style={[styles.tabText, activeTab === 'tickets' && styles.tabTextActive]}>My Tickets</Text>
-        </TouchableOpacity>
-      </View>
+          <TouchableOpacity style={styles.openTicketBtn} onPress={() => router.push('/settings/tickets')}>
+            <Ionicons name="chatbubbles" size={20} color={COLORS.black} />
+            <Text style={styles.openTicketBtnText}>Open a Support Ticket</Text>
+          </TouchableOpacity>
 
-      {activeTab === 'submit' ? (
-        <ScrollView contentContainerStyle={styles.content}>
-        <View style={styles.iconContainer}>
-          <Ionicons name="headset" size={60} color={COLORS.gold} />
-          <Text style={styles.title}>How can we help?</Text>
-          <Text style={styles.subtitle}>
-            Report a bug, complain about a payment issue, or ask a question.
-          </Text>
-        </View>
-
-        <View style={styles.formGroup}>
-          <Text style={styles.label}>Subject</Text>
-          <TextInput
-            style={styles.input}
-            placeholder="e.g. Payment Failed, Bug Report..."
-            placeholderTextColor={COLORS.textTertiary}
-            value={subject}
-            onChangeText={setSubject}
-            maxLength={100}
-          />
-        </View>
-
-        <View style={styles.formGroup}>
-          <Text style={styles.label}>Phone Number (Optional)</Text>
-          <TextInput
-            style={styles.input}
-            placeholder="e.g. +1 234 567 8900"
-            placeholderTextColor={COLORS.textTertiary}
-            value={phone}
-            onChangeText={setPhone}
-            keyboardType="phone-pad"
-            maxLength={20}
-          />
-        </View>
-
-        <View style={styles.formGroup}>
-          <Text style={styles.label}>Message</Text>
-          <TextInput
-            style={[styles.input, styles.textArea]}
-            placeholder="Please describe your issue in detail..."
-            placeholderTextColor={COLORS.textTertiary}
-            value={message}
-            onChangeText={setMessage}
-            multiline
-            textAlignVertical="top"
-          />
-        </View>
-
-        <TouchableOpacity 
-          style={[styles.submitBtn, loading && styles.submitBtnDisabled]} 
-          onPress={handleSubmit}
-          disabled={loading}
-        >
-          <Text style={styles.submitBtnText}>
-            {loading ? 'Submitting...' : 'Submit Ticket'}
-          </Text>
-        </TouchableOpacity>
-      </ScrollView>
-      ) : (
-        <View style={styles.ticketsContent}>
-          {loadingTickets ? (
-            <ActivityIndicator color={COLORS.gold} style={{ marginTop: 40 }} />
-          ) : tickets.length === 0 ? (
-            <View style={styles.emptyContainer}>
-              <Ionicons name="chatbubble-ellipses-outline" size={60} color={COLORS.textTertiary} />
-              <Text style={styles.emptyText}>You haven't opened any support tickets yet.</Text>
-            </View>
-          ) : (
-            <ScrollView contentContainerStyle={{ padding: 16, gap: 12 }}>
-              {tickets.map(ticket => (
-                <View key={ticket.id} style={styles.ticketCard}>
-                  <View style={styles.ticketHeader}>
-                    <Text style={styles.ticketDate}>
-                      {new Date(ticket.created_at).toLocaleDateString()}
-                    </Text>
-                    <View style={[styles.badge, ticket.status === 'open' ? styles.badgeOpen : styles.badgeClosed]}>
-                      <Text style={[styles.badgeText, ticket.status === 'open' ? styles.badgeTextOpen : styles.badgeTextClosed]}>
-                        {ticket.status.toUpperCase()}
-                      </Text>
-                    </View>
+          <View style={styles.faqSection}>
+            <Text style={styles.faqHeader}>Frequently Asked Questions</Text>
+            {FAQS.map((faq, index) => {
+              const isExpanded = expandedId === index;
+              return (
+                <TouchableOpacity 
+                  key={index} 
+                  style={styles.faqCard} 
+                  activeOpacity={0.8}
+                  onPress={() => toggleExpand(index)}
+                >
+                  <View style={styles.faqQuestionRow}>
+                    <Text style={styles.faqQuestion}>{faq.question}</Text>
+                    <Ionicons 
+                      name={isExpanded ? "chevron-up" : "chevron-down"} 
+                      size={20} 
+                      color={COLORS.gold} 
+                    />
                   </View>
-                  <Text style={styles.ticketSubject}>{ticket.subject}</Text>
-                  <Text style={styles.ticketMessage}>{ticket.message}</Text>
-                </View>
-              ))}
-            </ScrollView>
-          )}
-        </View>
-          )}
-        </KeyboardAvoidingView>
+                  {isExpanded && (
+                    <Text style={styles.faqAnswer}>{faq.answer}</Text>
+                  )}
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+
+        </ScrollView>
       </SafeAreaView>
-    </BlurView>
+    </View>
   );
 }
 
 const getStyles = (COLORS: any) => StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: 'transparent',
-  },
+  container: { flex: 1, backgroundColor: COLORS.black },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingTop: 60,
-    paddingBottom: 20,
-    paddingHorizontal: 16,
-    backgroundColor: COLORS.card,
-  },
-  backBtn: {
-    width: 40,
-    height: 40,
-    justifyContent: 'center',
-  },
-  headerTitle: {
-    color: COLORS.textPrimary,
-    fontSize: 18,
-    fontWeight: '700',
-  },
-  content: {
-    padding: 24,
-  },
-  iconContainer: {
-    alignItems: 'center',
-    marginBottom: 32,
-    marginTop: 10,
-  },
-  title: {
-    color: COLORS.textPrimary,
-    fontSize: 24,
-    fontWeight: '800',
-    marginTop: 16,
-  },
-  subtitle: {
-    color: COLORS.textSecondary,
-    fontSize: 15,
-    textAlign: 'center',
-    marginTop: 8,
-    lineHeight: 22,
-  },
-  formGroup: {
-    marginBottom: 20,
-  },
-  label: {
-    color: COLORS.textSecondary,
-    fontSize: 14,
-    fontWeight: '600',
-    marginBottom: 8,
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-  },
-  input: {
-    backgroundColor: COLORS.card,
-    borderWidth: 1,
-    borderColor: COLORS.divider,
-    borderRadius: 16,
-    padding: 16,
-    color: COLORS.textPrimary,
-    fontSize: 16,
-  },
-  textArea: {
-    height: 150,
     paddingTop: 16,
+    paddingBottom: 20,
+    backgroundColor: 'transparent',
   },
-  submitBtn: {
-    backgroundColor: COLORS.gold,
-    borderRadius: 16,
-    padding: 18,
-    alignItems: 'center',
-    marginTop: 12,
+  backBtn: { width: 40, height: 40, justifyContent: 'center' },
+  headerTitle: { color: COLORS.textPrimary, fontSize: 18, fontWeight: '700' },
+  content: { padding: 16, paddingBottom: 60 },
+  iconContainer: { alignItems: 'center', marginBottom: 24, marginTop: 10 },
+  title: { color: COLORS.textPrimary, fontSize: 24, fontWeight: '800', marginTop: 16 },
+  subtitle: { color: COLORS.textSecondary, fontSize: 15, textAlign: 'center', marginTop: 8, lineHeight: 22 },
+  openTicketBtn: { 
+    backgroundColor: COLORS.gold, 
+    flexDirection: 'row',
+    borderRadius: 16, 
+    padding: 18, 
+    alignItems: 'center', 
+    justifyContent: 'center',
+    marginBottom: 32,
+    gap: 8
   },
-  submitBtnDisabled: {
-    opacity: 0.6,
+  openTicketBtnText: { color: COLORS.black, fontSize: 16, fontWeight: '800' },
+  faqSection: { marginTop: 8 },
+  faqHeader: { color: COLORS.textSecondary, fontSize: 14, fontWeight: '700', textTransform: 'uppercase', marginBottom: 16, letterSpacing: 0.5 },
+  faqCard: { 
+    backgroundColor: COLORS.card, 
+    borderRadius: 16, 
+    padding: 16, 
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: COLORS.divider
   },
-  submitBtnText: {
-    color: COLORS.black,
-    fontSize: 16,
-    fontWeight: '800',
-  },
-  tabs: { flexDirection: 'row', padding: 16, gap: 12 },
-  tab: { flex: 1, paddingVertical: 12, alignItems: 'center', borderRadius: 8, backgroundColor: COLORS.card, borderWidth: 1, borderColor: COLORS.divider },
-  tabActive: { backgroundColor: COLORS.gold + '20', borderColor: COLORS.gold },
-  tabText: { color: COLORS.textSecondary, fontWeight: '600' },
-  tabTextActive: { color: COLORS.gold },
-  ticketsContent: { flex: 1 },
-  emptyContainer: { alignItems: 'center', marginTop: 80, gap: 12 },
-  emptyText: { color: COLORS.textSecondary, fontSize: 16 },
-  ticketCard: { backgroundColor: COLORS.card, borderRadius: 16, padding: 16, borderWidth: 1, borderColor: COLORS.divider },
-  ticketHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 },
-  ticketDate: { color: COLORS.textTertiary, fontSize: 12 },
-  badge: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 4 },
-  badgeOpen: { backgroundColor: 'rgba(255, 60, 60, 0.1)' },
-  badgeClosed: { backgroundColor: 'rgba(60, 255, 60, 0.1)' },
-  badgeText: { fontSize: 10, fontWeight: '800' },
-  badgeTextOpen: { color: COLORS.error },
-  badgeTextClosed: { color: '#4ade80' },
-  ticketSubject: { color: COLORS.textPrimary, fontSize: 16, fontWeight: '800', marginBottom: 8 },
-  ticketMessage: { color: COLORS.textSecondary, fontSize: 14, lineHeight: 22 },
+  faqQuestionRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  faqQuestion: { color: COLORS.textPrimary, fontSize: 16, fontWeight: '700', flex: 1, paddingRight: 16 },
+  faqAnswer: { color: COLORS.textSecondary, fontSize: 14, lineHeight: 22, marginTop: 12, paddingTop: 12, borderTopWidth: 1, borderTopColor: COLORS.divider },
 });

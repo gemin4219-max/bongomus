@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { View, Text, StyleSheet, Switch, ScrollView, TouchableOpacity } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { GlassView as BlurView } from '@/components/GlassView';
+
 import { Stack, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useThemeStore } from '../../store/themeStore';
@@ -16,7 +16,7 @@ export default function NotificationsSettings() {
   const [enabled, setEnabled] = useState(true);
 
   return (
-    <BlurView intensity={70} tint="dark" style={{ flex: 1 }}>
+    <View style={{ flex: 1, backgroundColor: COLORS.black }}>
       <SafeAreaView style={{ flex: 1 }} edges={['top']}>
         <Stack.Screen options={{ headerShown: false }} />
         <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingTop: 60, paddingBottom: 12 }}>
@@ -39,7 +39,7 @@ export default function NotificationsSettings() {
       </View>
         </ScrollView>
       </SafeAreaView>
-    </BlurView>
+    </View>
   );
 }
 

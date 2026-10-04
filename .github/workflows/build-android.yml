@@ -70,6 +70,7 @@ jobs:
           KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          _JAVA_OPTIONS: "-Xmx6g -XX:MaxMetaspaceSize=1g"
         run: |
           cd android
           chmod +x gradlew
