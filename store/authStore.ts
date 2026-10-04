@@ -3,6 +3,17 @@ import { supabase } from '../lib/supabase';
 import { Session } from '@supabase/supabase-js';
 import { Profile } from '../constants';
 import { useThemeStore } from './themeStore';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+
+// Helper to generate or retrieve device ID
+const getDeviceId = async () => {
+  let deviceId = await AsyncStorage.getItem('bongo_device_id');
+  if (!deviceId) {
+    deviceId = Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
+    await AsyncStorage.setItem('bongo_device_id', deviceId);
+  }
+  return deviceId;
+};
 
 type AuthStore = {
   session: Session | null;
@@ -81,9 +92,36 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
 
   signInAnonymously: async () => {
     set({ isLoading: true });
-    const { error } = await supabase.auth.signInAnonymously();
-    set({ isLoading: false });
-    return error?.message ?? null;
+    try {
+      const deviceId = await getDeviceId();
+      const email = `device_${deviceId}@guest.bongo.app`;
+      const password = `secret_${deviceId}_bongo!`;
+
+      // Try to sign in first
+      const { error: signInError } = await supabase.auth.signInWithPassword({ email, password });
+      
+      if (signInError) {
+        // If account doesn't exist, sign them up
+        const { error: signUpError } = await supabase.auth.signUp({
+          email,
+          password,
+          options: {
+            data: { username: `guest_${deviceId.substring(0, 8)}`, display_name: 'Guest User' }
+          }
+        });
+        
+        if (signUpError) {
+          set({ isLoading: false });
+          return signUpError.message;
+        }
+      }
+      
+      set({ isLoading: false });
+      return null;
+    } catch (e: any) {
+      set({ isLoading: false });
+      return e.message;
+    }
   },
 
   signIn: async (email, password) => {
@@ -109,7 +147,11 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
     }
 
     let data, error;
-    const isAnon = get().session?.user?.is_anonymous;
+    const session = get().session;
+    // Check if they are a real Supabase anonymous user OR our custom device fingerprint guest
+    const isAnon = session?.user?.is_anonymous || 
+                   session?.user?.app_metadata?.provider === 'anonymous' || 
+                   session?.user?.email?.endsWith('@guest.bongo.app');
 
     if (isAnon) {
       // Upgrade anonymous user to a permanent account

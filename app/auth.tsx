@@ -56,6 +56,29 @@ export default function AuthScreen() {
           }
         }
       }
+      
+      const session = useAuthStore.getState().session;
+      const isGuest = session?.user?.is_anonymous || session?.user?.app_metadata?.provider === 'anonymous';
+      
+      if (isGuest) {
+        Alert.alert(
+          'Onyo (Warning)',
+          'Ukiingia kwenye akaunti nyingine, utapoteza data na credits za akaunti hii ya muda (Guest). Je, unataka kuendelea? (Logging in will discard your guest data. Continue?)',
+          [
+            { text: 'Hapana (No)', style: 'cancel' },
+            { 
+              text: 'Ndiyo (Yes)', 
+              style: 'destructive',
+              onPress: async () => {
+                const err = await signIn(loginEmail, password);
+                if (err) Alert.alert('Imeshindwa', err);
+              }
+            }
+          ]
+        );
+        return;
+      }
+      
       error = await signIn(loginEmail, password);
     } else {
       let finalEmail = email.trim().toLowerCase();
@@ -193,6 +216,13 @@ export default function AuthScreen() {
 
 
           <View style={styles.divider} />
+
+          <TouchableOpacity style={styles.switchModeBtn} onPress={() => setMode(mode === 'login' ? 'signup' : 'login')}>
+            <Text style={styles.footerText}>
+              {mode === 'login' ? "Hauna akaunti? " : "Unayo akaunti tayari? "}
+              <Text style={styles.footerLink}>{mode === 'login' ? 'Tengeneza' : 'Ingia'}</Text>
+            </Text>
+          </TouchableOpacity>
 
           <TouchableOpacity style={styles.offlineBtn} onPress={() => {
             const signInAnonymously = useAuthStore.getState().signInAnonymously;

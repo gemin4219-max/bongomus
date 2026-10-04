@@ -1,0 +1,111 @@
+export enum State {
+  None = 'none',
+  Ready = 'ready',
+  Playing = 'playing',
+  Paused = 'paused',
+  Stopped = 'stopped',
+  Buffering = 'buffering',
+  Loading = 'loading',
+  Error = 'error',
+}
+export enum Event {
+  PlaybackState = 'playback-state',
+  PlaybackError = 'playback-error',
+  PlaybackQueueEnded = 'playback-queue-ended',
+  PlaybackTrackChanged = 'playback-track-changed',
+  PlaybackActiveTrackChanged = 'playback-active-track-changed',
+  PlaybackProgressUpdated = 'playback-progress-updated',
+  RemotePlay = 'remote-play',
+  RemotePause = 'remote-pause',
+  RemoteStop = 'remote-stop',
+  RemoteNext = 'remote-next',
+  RemotePrevious = 'remote-previous',
+  RemoteJumpForward = 'remote-jump-forward',
+  RemoteJumpBackward = 'remote-jump-backward',
+  RemoteSeek = 'remote-seek',
+}
+export enum AppKilledPlaybackBehavior {
+  ContinuePlayback = 'continue-playback',
+  PausePlayback = 'pause-playback',
+  StopPlaybackAndRemoveNotification = 'stop-playback-and-remove-notification',
+}
+export enum Capability {
+  Play = 0,
+  PlayFromId = 1,
+  PlayFromSearch = 2,
+  Pause = 3,
+  Stop = 4,
+  SeekTo = 5,
+  Skip = 6,
+  SkipToNext = 7,
+  SkipToPrevious = 8,
+  JumpForward = 9,
+  JumpBackward = 10,
+  SetRating = 11,
+  Like = 12,
+  Dislike = 13,
+  Bookmark = 14,
+}
+export enum IOSCategory {
+  Playback = 'playback',
+  PlayAndRecord = 'playAndRecord',
+  MultiRoute = 'multiRoute',
+  Ambient = 'ambient',
+  SoloAmbient = 'soloAmbient',
+  Record = 'record',
+}
+export enum IOSCategoryMode {
+  Default = 'default',
+  GameChat = 'gameChat',
+  Measurement = 'measurement',
+  MoviePlayback = 'moviePlayback',
+  SpokenAudio = 'spokenAudio',
+  VideoChat = 'videoChat',
+  VideoRecording = 'videoRecording',
+  VoiceChat = 'voiceChat',
+  VoicePrompt = 'voicePrompt',
+}
+export enum IOSCategoryOptions {
+  MixWithOthers = 1,
+  DuckOthers = 2,
+  InterruptSpokenAudioAndMixWithOthers = 17,
+  AllowBluetooth = 4,
+  AllowBluetoothA2DP = 32,
+  AllowAirPlay = 64,
+  DefaultToSpeaker = 8,
+}
+export enum PitchAlgorithm {
+  Linear = 0,
+  Music = 1,
+  Voice = 2,
+}
+
+const TrackPlayer = {
+  setupPlayer: async () => {},
+  updateOptions: async () => {},
+  add: async () => {},
+  play: async () => {},
+  pause: async () => {},
+  stop: async () => {},
+  reset: async () => {},
+  skip: async () => {},
+  skipToNext: async () => {},
+  skipToPrevious: async () => {},
+  remove: async () => {},
+  getTrack: async () => null,
+  getQueue: async () => [],
+  skipToIndex: async () => {},
+  updateMetadataForTrack: async () => {},
+  clearNowPlayingMetadata: async () => {},
+  updateNowPlayingMetadata: async () => {},
+  getPlaybackState: async () => ({ state: State.None }),
+  getVolume: async () => 1,
+  setVolume: async () => {},
+  getRate: async () => 1,
+  setRate: async () => {},
+  getProgress: async () => ({ position: 0, duration: 0, buffered: 0 }),
+  seekTo: async () => {},
+  addEventListener: () => ({ remove: () => {} }),
+};
+
+export default TrackPlayer;

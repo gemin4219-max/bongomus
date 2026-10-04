@@ -168,6 +168,7 @@ export default function ProfileScreen() {
           <>
             <MenuRow icon="stats-chart" label="Admin Dashboard: Revenue & Users" iconColor={COLORS.error} onPress={() => router.push('/admin/dashboard')} styles={styles} COLORS={COLORS} />
             <MenuRow icon="settings" label="Admin System Settings" iconColor={COLORS.error} onPress={() => router.push('/admin/settings')} styles={styles} COLORS={COLORS} />
+            <MenuRow icon="images" label="Admin Panel: Get Inspired Cards" iconColor={COLORS.error} onPress={() => router.push('/admin/carousel')} styles={styles} COLORS={COLORS} />
             <MenuRow icon="calendar" label="Admin Panel: Manage Events" iconColor={COLORS.error} onPress={() => router.push('/admin/events')} styles={styles} COLORS={COLORS} />
             <MenuRow icon="shield-checkmark" label="Admin Panel: Manage Tickets" iconColor={COLORS.error} onPress={() => router.push('/admin/tickets')} styles={styles} COLORS={COLORS} />
             <MenuRow icon="checkmark-done-circle" label="Admin Panel: Verifications" iconColor={COLORS.error} onPress={() => router.push('/admin/verifications')} styles={styles} COLORS={COLORS} />
