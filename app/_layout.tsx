@@ -4,13 +4,7 @@ import { LogBox, Alert } from 'react-native';
 import * as SplashScreen from 'expo-splash-screen';
 import * as ScreenCapture from 'expo-screen-capture';
 
-import { setJSExceptionHandler } from 'react-native-exception-handler';
-// Fallback
-if (typeof ErrorUtils !== 'undefined') {
-  ErrorUtils.setGlobalHandler((err, isFatal) => {
-    console.error('GLOBAL JS ERROR:', err);
-    Alert.alert('Fatal JS Error', err ? err.message : 'Unknown error');
-  });
+);
 }
 
 
