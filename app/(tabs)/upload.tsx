@@ -27,7 +27,7 @@ import * as FileSystem from "expo-file-system/legacy";
 import { decode } from "base64-arraybuffer";
 
 import { LinearGradient } from "expo-linear-gradient";
-import { BlurView } from "expo-blur";
+import { GlassView as BlurView } from "@/components/GlassView";
 
 type EPTrack = {
   title: string;
