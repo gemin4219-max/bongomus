@@ -84,27 +84,32 @@ export default function NotificationsFeed() {
 
     const fetchNotifications = async () => {
       setLoading(true);
-      const { data, error } = await supabase
-        .from('notifications')
-        .select('*')
-        .eq('user_id', session.user.id)
-        .order('created_at', { ascending: false });
+      try {
+        const { data, error } = await supabase
+          .from('notifications')
+          .select('id, type, title, message, read, created_at')
+          .eq('user_id', session.user.id)
+          .order('created_at', { ascending: false });
 
-      if (!error && data) {
-        setNotifications(data);
-      }
+        if (!error && data) {
+          setNotifications(data);
+        }
+        // Silently ignore DB schema errors (e.g. missing column) — do NOT Alert
+      } catch (_) {}
       setLoading(false);
 
       // Subscribe to real-time inserts
-      channel = supabase.channel('realtime_notifications')
-        .on(
-          'postgres_changes',
-          { event: 'INSERT', schema: 'public', table: 'notifications', filter: `user_id=eq.${session.user.id}` },
-          (payload) => {
-            setNotifications(prev => [payload.new as Notification, ...prev]);
-          }
-        )
-        .subscribe();
+      try {
+        channel = supabase.channel('realtime_notifications')
+          .on(
+            'postgres_changes',
+            { event: 'INSERT', schema: 'public', table: 'notifications', filter: `user_id=eq.${session.user.id}` },
+            (payload) => {
+              setNotifications(prev => [payload.new as Notification, ...prev]);
+            }
+          )
+          .subscribe();
+      } catch (_) {}
     };
 
     fetchNotifications();
@@ -122,10 +127,12 @@ export default function NotificationsFeed() {
     // Optimistic update
     setNotifications(prev => prev.map(n => n.id === id ? { ...n, read: true } : n));
 
-    await supabase
-      .from('notifications')
-      .update({ read: true })
-      .eq('id', id);
+    try {
+      await supabase
+        .from('notifications')
+        .update({ read: true })
+        .eq('id', id);
+    } catch (_) {}
   };
 
   const renderItem = ({ item, index }: { item: Notification, index: number }) => {
