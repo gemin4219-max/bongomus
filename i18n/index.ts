@@ -27,7 +27,7 @@ const initI18n = async () => {
       resources,
       lng: savedLanguage,
       fallbackLng: 'sw',
-      compatibilityJSON: 'v3', // Required for React Native Android
+      compatibilityJSON: 'v3' as any, // Required for React Native Android
       interpolation: {
         escapeValue: false
       }

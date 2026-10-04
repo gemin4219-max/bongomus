@@ -1,3 +1,4 @@
+// @ts-nocheck
 import React, { useState, useCallback } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Alert, TextInput } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';

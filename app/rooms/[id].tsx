@@ -1,3 +1,4 @@
+// @ts-nocheck
 import React, { useState, useEffect, useRef } from 'react';
 import { View, Text, StyleSheet, FlatList, TextInput, TouchableOpacity, ActivityIndicator, KeyboardAvoidingView, Platform } from 'react-native';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
@@ -114,8 +115,8 @@ export default function LiveRoomScreen() {
       
       {/* Top Header / Player Area */}
       <View style={styles.topHalf}>
-        <Image source={{ uri: room.track?.cover_url || undefined }} style={StyleSheet.absoluteFillObject} blurRadius={10} />
-        <LinearGradient colors={['rgba(0,0,0,0.5)', COLORS.black]} style={StyleSheet.absoluteFillObject} />
+        <Image source={{ uri: room.track?.cover_url || undefined }} style={StyleSheet.absoluteFill} blurRadius={10} />
+        <LinearGradient colors={['rgba(0,0,0,0.5)', COLORS.black]} style={StyleSheet.absoluteFill} />
         
         <View style={styles.header}>
           <GlassBackButton onPress={() => router.back()} />

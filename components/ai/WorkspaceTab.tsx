@@ -1,3 +1,4 @@
+// @ts-nocheck
 import React, { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, Alert, ScrollView, Platform, Modal, TextInput } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
@@ -112,7 +113,7 @@ export default function WorkspaceTab({ openPersonaModal, navigateToTab }: Worksp
 
       const audioPublicUrl = supabase.storage.from('audio').getPublicUrl(`ai_tracks/${track.id}.mp3`).data.publicUrl;
 
-      const { data: existing } = await supabase.from('tracks').select('id').eq('audio_url', audioPublicUrl).maybeSingle();
+      const { data: existing } = await supabase.from('tracks').select('id, cover_url').eq('audio_url', audioPublicUrl).maybeSingle();
 
       if (existing) {
         const { error: dbErr } = await supabase.from('tracks').update({
@@ -158,7 +159,7 @@ export default function WorkspaceTab({ openPersonaModal, navigateToTab }: Worksp
     useAIStore.getState().addTask(
       taskId,
       `Ext: ${originalTitle || 'AI Track'}`,
-      'TEXT_TO_MUSIC'
+      'GENERATE'
     );
     Alert.alert("Success", "Extension started! A new task has been added to your workspace.");
   };

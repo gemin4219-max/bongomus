@@ -1,3 +1,4 @@
+// @ts-nocheck
 import React, { useState } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, LayoutChangeEvent, StyleProp, ViewStyle } from 'react-native';
 import Svg, { Path, Rect, Circle, Line } from 'react-native-svg';

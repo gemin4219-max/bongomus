@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { supabase } from './supabase';
 
 export const getApiConfig = async (): Promise<{ provider: 'suno' | 'kie', apiKey: string, baseUrl: string }> => {

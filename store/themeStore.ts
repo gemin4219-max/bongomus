@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { THEMES } from '../constants';
 
-export type ThemeType = 'spotify';
+export type ThemeType = keyof typeof THEMES;
 export type VinylThemeType = 'classic' | 'scratched' | 'colored' | 'gold';
 
 interface ThemeState {

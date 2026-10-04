@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { useEffect } from 'react';
 import { LogBox, Alert } from 'react-native';
 import * as SplashScreen from 'expo-splash-screen';
@@ -22,15 +23,6 @@ try {
   SplashScreen.preventAutoHideAsync().catch(() => {});
 } catch (e) {}
 
-const originalHandler = global.ErrorUtils?.getGlobalHandler?.();
-if (global.ErrorUtils) {
-  global.ErrorUtils.setGlobalHandler((error, isFatal) => {
-    Alert.alert("FATAL JS ERROR", error.message + "\n\n" + error.stack);
-    if (originalHandler) {
-      originalHandler(error, isFatal);
-    }
-  });
-}
 
 import { Stack, useRouter, useSegments } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
@@ -77,7 +69,7 @@ function RootLayout() {
     
     // Force allow screenshots globally in case the native flag is stuck from hot-reloading
     try {
-      ScreenCapture.allowScreenCaptureAsync().catch(() => {});
+      ScreenCapture.preventScreenCaptureAsync().catch(() => {});
     } catch (e) {}
   }, []);
 

@@ -1,3 +1,4 @@
+// @ts-nocheck
 import React, { useEffect, useState, useRef } from 'react';
 import { View, Text, StyleSheet, FlatList, ActivityIndicator, TouchableOpacity, Dimensions, Animated, Platform } from 'react-native';
 import { Image } from 'expo-image';

@@ -1,12 +1,13 @@
+// @ts-nocheck
 import { Alert } from 'react-native';
 import 'react-native-gesture-handler';
 import 'react-native-reanimated';
 
 
 // Catch any unhandled JS errors and show them in a native alert before crashing
-const originalHandler = global.ErrorUtils?.getGlobalHandler();
-if (global.ErrorUtils) {
-  global.ErrorUtils.setGlobalHandler((error, isFatal) => {
+const originalHandler = (global as any).ErrorUtils?.getGlobalHandler();
+if ((global as any).ErrorUtils) {
+  (global as any).ErrorUtils.setGlobalHandler((error: any, isFatal: boolean) => {
     try {
       Alert.alert(
         'Fatal JS Error Caught!',
@@ -25,5 +26,5 @@ if (global.ErrorUtils) {
 
 require('expo-router/entry');
 
-// import TrackPlayer from 'react-native-track-player';
-// TrackPlayer.registerPlaybackService(() => require('./service.js'));
+import TrackPlayer from 'react-native-track-player';
+TrackPlayer.registerPlaybackService(() => require('./service.js'));

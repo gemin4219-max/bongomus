@@ -147,8 +147,8 @@ export const useOfflineStore = create<OfflineStore>()(
 
         // Fix iOS Path Bug: iOS changes the app's Document directory UUID randomly on reboots/updates.
         // We must extract the filename and append it to the CURRENT documentDirectory.
-        const filename = track.localUri.split('/').pop();
-        const currentUri = FileSystem.documentDirectory + filename;
+        const filename = track.localUri.split('/').pop() || '';
+        const currentUri = (FileSystem.documentDirectory || '') + filename;
 
         try {
           const info = await FileSystem.getInfoAsync(currentUri);
@@ -167,8 +167,8 @@ export const useOfflineStore = create<OfflineStore>()(
         const track = get().downloadedTracks[trackId];
         if (!track || !track.localCoverUri) return null;
 
-        const filename = track.localCoverUri.split('/').pop();
-        const currentUri = FileSystem.documentDirectory + filename;
+        const filename = track.localCoverUri.split('/').pop() || '';
+        const currentUri = (FileSystem.documentDirectory || '') + filename;
 
         try {
           const info = await FileSystem.getInfoAsync(currentUri);

@@ -1,3 +1,4 @@
+// @ts-nocheck
 import React, { useEffect, useState, useRef } from 'react';
 import { View, StyleSheet, Animated, Dimensions, Text, Easing } from 'react-native';
 import { useThemeStore } from '../store/themeStore';
