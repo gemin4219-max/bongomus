@@ -70,8 +70,7 @@
       [
         "expo-audio",
         {
-          "microphonePermission": "Bongo Stream uses the microphone to record your vocals and voice samples.",
-          "enableBackgroundPlayback": true
+          "microphonePermission": "Bongo Stream uses the microphone to record your vocals and voice samples."
         }
       ],
       "expo-asset",
@@ -85,8 +84,7 @@
           }
         }
       ],
-      "@sentry/react-native/expo",
-      "@sentry/react-native"
+      "@sentry/react-native/expo"
     ],
     "experiments": {
       "typedRoutes": true

@@ -217,7 +217,7 @@ const styles = StyleSheet.create({
   listContent: { padding: 20, paddingTop: Platform.OS === 'ios' ? 120 : 100, paddingBottom: 40, gap: 16 },
   notificationBox: { 
     flexDirection: 'row', 
-    alignItems: 'center', 
+    alignItems: 'flex-start', 
     paddingVertical: 12, 
     paddingHorizontal: 8,
   },
@@ -236,5 +236,5 @@ const styles = StyleSheet.create({
   unreadText: { fontWeight: '800', color: '#fff' },
   time: { color: 'rgba(255,255,255,0.3)', fontSize: 12, fontWeight: '500', marginTop: 2 },
   message: { color: 'rgba(255,255,255,0.5)', fontSize: 14, lineHeight: 22, fontWeight: '400' },
-  unreadDot: { width: 8, height: 8, borderRadius: 4, marginTop: -30 }
+  unreadDot: { width: 8, height: 8, borderRadius: 4, marginTop: 17 }
 });

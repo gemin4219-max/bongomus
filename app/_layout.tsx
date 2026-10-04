@@ -3,7 +3,7 @@ import { useEffect } from 'react';
 import { LogBox, Alert } from 'react-native';
 import * as SplashScreen from 'expo-splash-screen';
 import * as ScreenCapture from 'expo-screen-capture';
-import * as Sentry from '@sentry/react-native';
+
 
 // Crash reporting: catches JS errors and native iOS/Android crashes.
 // Native crashes are sent on the next app launch.
@@ -83,17 +83,24 @@ function RootLayout() {
 
   useEffect(() => {
     // Hide the NATIVE splash screen only once fonts are loaded and auth has resolved.
-    // This is the real fix — the native splash stays dark until we're ready.
     if (fontsLoaded && !isLoading) {
       setTimeout(async () => {
         try {
           await SplashScreen.hideAsync();
-        } catch (e) {
-          // Ignore error if splash screen is already hidden (e.g., during fast refresh)
-        }
+        } catch (e) {}
       }, 100);
     }
   }, [fontsLoaded, isLoading]);
+
+  // HARD FALLBACK: Ensure the native splash screen ALWAYS hides after 3.5 seconds
+  useEffect(() => {
+    const timer = setTimeout(async () => {
+      try {
+        await SplashScreen.hideAsync();
+      } catch (e) {}
+    }, 3500);
+    return () => clearTimeout(timer);
+  }, []);
 
   useEffect(() => {
     if (isLoading) return;
@@ -153,7 +160,7 @@ function RootLayout() {
   );
 }
 
-export default Sentry.wrap(RootLayout);
+export default RootLayout;
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: '#0A0A0F' },
